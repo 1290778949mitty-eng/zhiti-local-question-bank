@@ -7,6 +7,12 @@
     "nodejs_compat"
   ],
   "main": "./worker/index.ts",
+  "routes": [
+    {
+      "pattern": "tiku.mittysapce.uk",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
