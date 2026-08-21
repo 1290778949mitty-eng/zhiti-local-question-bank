@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "zhiti-local-question-bank",
+  "account_id": "7a5978bf799135f5848744e55cbeb411",
   "compatibility_date": "2026-08-21",
   "compatibility_flags": [
     "nodejs_compat"
