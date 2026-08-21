@@ -1,3 +1,5 @@
+import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
+
 const questionSchema = {
   type: "object", additionalProperties: false,
   properties: {
@@ -31,6 +33,8 @@ function parseResult(text: string) { return JSON.parse(text.trim().replace(/^```
 
 export async function POST(request: Request) {
   try {
+    requireSameOrigin(request);
+    await requireUser(request);
     const apiKey = process.env.OPENAI_API_KEY; if (!apiKey) return Response.json({ error: "尚未配置智能识别", code: "MISSING_API_KEY" }, { status: 503 });
     const body = await request.json() as { image?: string; textHint?: string; pageNumber?: number; fileName?: string; categories?: Array<{ id: string; path: string }> };
     if (!body.image?.startsWith("data:image/")) return Response.json({ error: "没有收到有效页面图片" }, { status: 400 });

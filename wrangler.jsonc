@@ -4,10 +4,7 @@
   "account_id": "7a5978bf799135f5848744e55cbeb411",
   "workers_dev": true,
   "preview_urls": false,
-  "compatibility_date": "2026-08-21",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_date": "2026-05-22",
   "main": "./worker/index.ts",
   "routes": [
     {
@@ -20,6 +17,14 @@
     "not_found_handling": "none",
     "binding": "ASSETS"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zhiti-question-bank",
+      "database_id": "8d93b3dc-001f-4f32-adba-4bb5dc971c17",
+      "migrations_dir": "migrations"
+    }
+  ],
   "cache": {
     "enabled": true
   }

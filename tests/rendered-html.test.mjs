@@ -29,7 +29,7 @@ async function render() {
   );
 }
 
-test("server-renders the local question-bank shell", async () => {
+test("server-renders the cloud question-bank guest shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -37,11 +37,26 @@ test("server-renders the local question-bank shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
   assert.match(html, /全部试题/);
-  assert.doesNotMatch(html, /本机存储/);
-  assert.match(html, /新建试题/);
+  assert.match(html, /云端共享题库/);
+  assert.match(html, /登录后录题与下载/);
+  assert.doesNotMatch(html, /新建试题/);
   assert.doesNotMatch(html, /⇧ 文件录入/);
-  assert.match(html, /生成 Word/);
+  assert.doesNotMatch(html, /<button[^>]*>生成 Word/);
   assert.doesNotMatch(html, /Starter Project|Your site is taking shape/);
+});
+
+test("keeps every privileged operation behind server-side authentication", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
+  const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
+  const downloadRoute = await readFile(new URL("../app/api/download/route.ts", import.meta.url), "utf8");
+
+  assert.match(page, /访客 · 仅浏览/);
+  assert.match(auth, /HttpOnly; Secure; SameSite=Lax/);
+  assert.match(auth, /PBKDF2/);
+  assert.match(questionRoute, /await requireUser\(request\)/);
+  assert.match(questionRoute, /你只能修改自己录入的题目/);
+  assert.match(downloadRoute, /await requireUser\(request\)/);
 });
 
 test("keeps the select-all control on the right without filter scroll chrome", async () => {
@@ -50,9 +65,9 @@ test("keeps the select-all control on the right without filter scroll chrome", a
 
   assert.doesNotMatch(page, /local-badge/);
   assert.match(css, /\.select-visible\s*\{[^}]*margin-left:auto/);
-  assert.match(css, /\.filters::\-webkit-scrollbar\s*\{\s*display:none/);
+  assert.match(css, /\.filters::-webkit-scrollbar\s*\{\s*display:none/);
   assert.match(css, /\.filters\s*\{[^}]*scrollbar-width:none/);
-  assert.match(css, /html::\-webkit-scrollbar,body::\-webkit-scrollbar\s*\{\s*display:none/);
+  assert.match(css, /html::-webkit-scrollbar,body::-webkit-scrollbar\s*\{\s*display:none/);
 });
 
 test("keeps file import inside the new-question flow only", async () => {

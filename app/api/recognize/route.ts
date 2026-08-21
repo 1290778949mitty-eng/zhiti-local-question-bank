@@ -1,3 +1,5 @@
+import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
+
 const schema = {
   type: "object", additionalProperties: false,
   properties: {
@@ -59,6 +61,8 @@ function parseResult(text: string) {
 
 export async function POST(request: Request) {
   try {
+    requireSameOrigin(request);
+    await requireUser(request);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return Response.json({ error: "尚未配置智能识别", code: "MISSING_API_KEY" }, { status: 503 });
     const body = await request.json() as { image?: string; categories?: Array<{ id: string; path: string }> };

@@ -9,8 +9,8 @@ import { shouldAutoVectorizeDiagram } from "../lib/vector-diagram-reconstruction
 import { renderVectorDiagramPlan, VectorDiagramFitError } from "../lib/vector-diagram-renderer";
 import { isGeometryQuestion, questionImages, resolveQuestionImageLayout } from "../lib/question-layout";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recognition-cleanup.mjs";
-import { loadLibrary, removeCategories, removeQuestion, removeQuestions, replaceLibrary, saveCategory, saveQuestion, saveQuestions } from "../lib/storage";
-import type { Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, Question, QuestionType, VectorDiagramPlan } from "../lib/types";
+import { authorizeDownload, createCloudCategory, createCloudQuestion, deleteCloudCategory, deleteCloudQuestion, fetchLibrary, fetchMe, importCloudLibrary, login, logout, register, updateCloudQuestion } from "../lib/api-client";
+import type { AuthUser, Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, Question, QuestionType, VectorDiagramPlan } from "../lib/types";
 
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const difficulties: Difficulty[] = ["基础", "中等", "提高"];
@@ -95,6 +95,15 @@ export default function Home() {
   const [paperTitle, setPaperTitle] = useState("七年级数学专项练习");
   const [includeAnswers, setIncludeAnswers] = useState(true);
   const [notice, setNotice] = useState("");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authDialog, setAuthDialog] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authInvite, setAuthInvite] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isReconstructingDiagram, setIsReconstructingDiagram] = useState(false);
   const [enableVectorReconstruction, setEnableVectorReconstruction] = useState(true);
@@ -120,12 +129,20 @@ export default function Home() {
   const cropStageRef = useRef<HTMLDivElement>(null);
   const fileImportAbortRef = useRef<AbortController | null>(null);
 
+  async function refreshLibrary(preserveCategory = true) {
+    const data = await fetchLibrary();
+    setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
+    setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
+    setActiveCategory((current) => preserveCategory && current && data.categories.some((item) => item.id === current) ? current : data.categories.find((item) => item.parentId === null)?.id ?? null);
+  }
+
   useEffect(() => {
-    loadLibrary().then((data) => {
+    Promise.all([fetchMe(), fetchLibrary()]).then(([auth, data]) => {
+      setAuthUser(auth.user);
       setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
       setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
       setActiveCategory(data.categories.find((item) => item.parentId === null)?.id ?? null);
-    }).catch(() => setNotice("题库读取失败，请刷新页面重试"));
+    }).catch(() => setNotice("云端题库读取失败，请刷新页面重试")).finally(() => setAuthLoading(false));
   }, []);
 
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
@@ -158,15 +175,33 @@ export default function Home() {
   const allFilteredSelected = filteredQuestions.length > 0 && filteredQuestions.every((item) => selectedIds.includes(item.id));
   const activeName = showSelected ? "我的组卷" : activeCategory ? categoryById(activeCategory)?.name ?? "全部试题" : "全部试题";
 
-  const toggleSelected = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const requireLogin = () => { if (authUser) return true; setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
+  const toggleSelected = (id: string) => { if (!requireLogin()) return; setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); };
   const toggleAllFiltered = () => {
+    if (!requireLogin()) return;
     const visibleIds = filteredQuestions.map((item) => item.id);
     setSelectedIds((current) => allFilteredSelected ? current.filter((id) => !visibleIds.includes(id)) : [...current, ...visibleIds.filter((id) => !current.includes(id))]);
   };
-  const openNewQuestion = () => { setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode("manual"); setQuestionDraft({ ...emptyDraft(), categoryId: activeCategory ?? categories[0]?.id ?? "", imageLayout: "right", contentImages: [] }); };
-  const openEditQuestion = (question: Question) => { setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode(question.originalImage ? "screenshot" : "manual"); setQuestionDraft({ ...question, options: [...question.options], contentImages: [...(question.contentImages ?? [])] }); };
+  const openNewQuestion = () => { if (!requireLogin()) return; setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode("manual"); setQuestionDraft({ ...emptyDraft(), categoryId: activeCategory ?? categories[0]?.id ?? "", imageLayout: "right", contentImages: [] }); };
+  const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { setNotice("你只能修改自己录入的题目"); return; } setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode(question.originalImage ? "screenshot" : "manual"); setQuestionDraft({ ...question, options: [...question.options], contentImages: [...(question.contentImages ?? [])] }); };
+
+  async function submitAuth() {
+    setAuthSubmitting(true); setAuthError("");
+    try {
+      const result = authMode === "register" ? await register(authEmail, authPassword, authInvite) : await login(authEmail, authPassword);
+      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite(""); await refreshLibrary();
+      setNotice(authMode === "register" ? "注册成功，已登录云端题库" : "登录成功");
+    } catch (error) { setAuthError(error instanceof Error ? error.message : "操作失败，请重试"); }
+    finally { setAuthSubmitting(false); }
+  }
+
+  async function signOut() {
+    try { await logout(); setAuthUser(null); setSelectedIds([]); setShowSelected(false); await refreshLibrary(); setNotice("已退出登录，当前为访客浏览"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "退出失败"); }
+  }
 
   function openFileImport() {
+    if (!requireLogin()) return;
     setQuestionDraft(null); setFileImportOpen(true); setFileImportStep("choose"); setFileImportName(""); setFileImportDrafts([]); setFileImportErrors([]);
     setFileImportCategory(activeCategory ?? categories[0]?.id ?? ""); setFileImportProgress({ current: 0, total: 0, label: "" });
   }
@@ -315,7 +350,10 @@ export default function Home() {
       delete question.importId; delete question.selected; delete question.documentNumber;
       return { ...question, stem: item.stem.trim(), stemParagraphs: item.stem.split(/\r?\n/).filter((line) => line.length > 0), options: item.options.map((option) => option.trim()).filter(Boolean), updatedAt: Date.now() } as Question;
     });
-    await saveQuestions(saved); setQuestions((current) => [...saved, ...current].sort((a, b) => b.createdAt - a.createdAt)); setFileImportOpen(false); setNotice(`已从文件录入 ${saved.length} 道试题`);
+    try {
+      const uploaded = await Promise.all(saved.map(async (question) => (await createCloudQuestion(question)).question));
+      setQuestions((current) => [...uploaded, ...current].sort((a, b) => b.createdAt - a.createdAt)); setFileImportOpen(false); setNotice(`已从文件录入 ${uploaded.length} 道云端试题`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "文件题目保存失败"); }
   }
 
   async function requestVectorDiagramReconstruction(stem: string, image: string, quality: DiagramQuality | undefined | null) {
@@ -467,40 +505,51 @@ export default function Home() {
     if (!questionDraft || !questionDraft.stem.trim() || !questionDraft.categoryId) { setNotice("请填写题干并选择分类"); return; }
     const timestamp = Date.now();
     const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
-    await saveQuestion(saved);
-    setQuestions((current) => [saved, ...current.filter((item) => item.id !== saved.id)].sort((a, b) => b.createdAt - a.createdAt));
-    setQuestionDraft(null); setNotice(questionDraft.id ? "试题已更新" : "试题已保存到本机");
+    try {
+      const result = questionDraft.id ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
+      setQuestions((current) => [result.question, ...current.filter((item) => item.id !== result.question.id)].sort((a, b) => b.createdAt - a.createdAt));
+      setQuestionDraft(null); setNotice(questionDraft.id ? "云端试题已更新" : "试题已保存到云端");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败"); }
   }
 
   async function duplicateQuestion(question: Question) {
+    if (!requireLogin()) return;
     const copy = { ...question, id: uid("q"), stem: `${question.stem}（副本）`, createdAt: Date.now(), updatedAt: Date.now() };
-    await saveQuestion(copy); setQuestions((current) => [copy, ...current]); setNotice("已复制试题");
+    try { const result = await createCloudQuestion(copy); setQuestions((current) => [result.question, ...current]); setNotice("已复制到自己的云端题库"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "复制失败"); }
   }
 
   async function deleteQuestion(question: Question) {
     if (!window.confirm("确定删除这道试题吗？此操作无法撤销。")) return;
-    await removeQuestion(question.id); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice("试题已删除");
+    try { await deleteCloudQuestion(question.id); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice("试题已删除"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); }
   }
 
   async function deleteSelectedQuestions() {
     const ids = selectedIds.filter((id) => questions.some((item) => item.id === id));
     if (!ids.length) { setBatchDeleteOpen(false); return; }
-    await removeQuestions(ids);
-    setQuestions((current) => current.filter((item) => !ids.includes(item.id)));
-    setExpandedAnswers((current) => current.filter((id) => !ids.includes(id)));
-    setSelectedIds([]); setBatchDeleteOpen(false); setNotice(`已批量删除 ${ids.length} 道试题`);
+    const editableIds = ids.filter((id) => questions.find((item) => item.id === id)?.canEdit);
+    if (!editableIds.length) { setBatchDeleteOpen(false); setNotice("所选题目中没有你可以删除的内容"); return; }
+    try {
+      await Promise.all(editableIds.map(deleteCloudQuestion));
+      setQuestions((current) => current.filter((item) => !editableIds.includes(item.id)));
+      setExpandedAnswers((current) => current.filter((id) => !editableIds.includes(id)));
+      setSelectedIds((current) => current.filter((id) => !editableIds.includes(id))); setBatchDeleteOpen(false); setNotice(`已删除 ${editableIds.length} 道有权限的试题`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "批量删除失败"); }
   }
 
   async function createCategory() {
     if (!categoryName.trim()) { setNotice("请填写分类名称"); return; }
     const category: Category = { id: uid("cat"), name: categoryName.trim(), parentId: categoryParent || null, createdAt: Date.now() };
-    await saveCategory(category); setCategories((current) => [...current, category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(category.id); setNotice("分类已创建");
+    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); setNotice("云端分类已创建"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "分类创建失败"); }
   }
 
   async function deleteCategory(category: Category) {
     const categoryIds = descendantsOf(category.id); const questionIds = questions.filter((item) => categoryIds.includes(item.categoryId)).map((item) => item.id);
     if (!window.confirm(`删除“${category.name}”会同时删除其子分类和 ${questionIds.length} 道试题。确定继续吗？`)) return;
-    await removeCategories(categoryIds, questionIds); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(categories.find((item) => item.parentId === null && !categoryIds.includes(item.id))?.id ?? null); setNotice("分类已删除");
+    try { await deleteCloudCategory(category.id); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(categories.find((item) => item.parentId === null && !categoryIds.includes(item.id))?.id ?? null); setNotice("分类已删除"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "分类删除失败"); }
   }
 
   function exportBackup() {
@@ -509,12 +558,13 @@ export default function Home() {
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; if (!file) return;
-    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!window.confirm("导入备份将替换当前题库，是否继续？")) return; await replaceLibrary(data); setCategories(data.categories); setQuestions(data.questions); setSelectedIds([]); setActiveCategory(data.categories[0]?.id ?? null); setCategoryDialog(null); setNotice("题库备份已恢复"); } catch { setNotice("无法识别这个备份文件"); } finally { event.target.value = ""; }
+    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!window.confirm("导入后会把备份中的分类和题目追加到云端题库，是否继续？")) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); setNotice(`已迁移 ${result.imported} 道题到云端`); } catch (error) { setNotice(error instanceof Error ? error.message : "无法识别这个备份文件"); } finally { event.target.value = ""; }
   }
 
   async function generateWord() {
     if (!selectedQuestions.length) return;
-    await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers); setExportDialog(false); setNotice("Word 练习已生成");
+    try { await authorizeDownload(); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers); setExportDialog(false); setNotice("Word 练习已生成"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "下载失败"); }
   }
 
   function renderTree(parentId: string | null, depth = 0) {
@@ -532,34 +582,34 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark">题</span><div><strong>Mitty</strong><span>的宝藏题库</span></div></div>
-        <nav aria-label="主导航"><button className={`nav-item ${!showSelected ? "active" : ""}`} onClick={() => setShowSelected(false)}>题库</button><button className={`nav-item ${showSelected ? "active" : ""}`} onClick={() => setShowSelected(true)}>我的组卷{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button></nav>
-        <button className="primary-button" onClick={openNewQuestion}><span>＋</span> 新建试题</button>
+        <nav aria-label="主导航"><button className={`nav-item ${!showSelected ? "active" : ""}`} onClick={() => setShowSelected(false)}>题库</button>{authUser && <button className={`nav-item ${showSelected ? "active" : ""}`} onClick={() => setShowSelected(true)}>我的组卷{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button>}</nav>
+        <div className="account-area">{authLoading ? <span className="guest-badge">正在连接云端…</span> : authUser ? <><span className="user-chip"><b>{authUser.role === "admin" ? "管理员" : "会员"}</b>{authUser.email}</span><button className="account-button" onClick={signOut}>退出</button><button className="primary-button" onClick={openNewQuestion}><span>＋</span> 新建试题</button></> : <><span className="guest-badge">访客 · 仅浏览</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>登录 / 注册</button></>}</div>
       </header>
 
       <section className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><div><span className="eyebrow">我的分类</span><h2>知识目录</h2></div><button className="icon-button" aria-label="添加分类" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋</button></div>
+          <div className="sidebar-heading"><div><span className="eyebrow">共享分类</span><h2>知识目录</h2></div>{authUser && <button className="icon-button" aria-label="添加分类" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋</button>}</div>
           <div className="tree">{categories.length ? renderTree(null) : <p className="empty-tree">还没有分类，点击右上角＋创建</p>}</div>
-          <button className="manage-button" onClick={() => setCategoryDialog("manage")}>⚙ 分类与数据管理</button>
+          {authUser ? <button className="manage-button" onClick={() => setCategoryDialog("manage")}>⚙ 分类与数据管理</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>登录后录题与下载</button>}
         </aside>
 
         <section className="content">
           <div className="content-head">
-            <div><p className="breadcrumb">{showSelected ? "组卷篮" : activeCategory ? pathOf(activeCategory) : "题库"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · 内容仅保存在这台电脑</p></div>
+            <div><p className="breadcrumb">{showSelected ? "组卷篮" : activeCategory ? pathOf(activeCategory) : "题库"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · 云端共享题库{authUser ? ` · 已登录为${authUser.role === "admin" ? "管理员" : "会员"}` : " · 访客可直接浏览"}</p></div>
             <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索试题" placeholder="搜索题干、答案、来源…" /></label>
           </div>
           <div className="filters">
             <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>全部题型 <span>{questions.length}</span></button>
             {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{type.replace("单选题", "选择题")} <span>{questions.filter((item) => item.type === type).length}</span></button>)}
-            <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消全选" : "全选当前结果"}</button>
+            {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消全选" : "全选当前结果"}</button>}
           </div>
           <div className="question-list">
-            {!filteredQuestions.length && <div className="empty-state"><div>空</div><h3>{showSelected ? "还没有勾选试题" : "这里还没有试题"}</h3><p>{showSelected ? "回到题库勾选需要组卷的题目" : "新建一道试题，开始建立自己的题库"}</p><button onClick={showSelected ? () => setShowSelected(false) : openNewQuestion}>{showSelected ? "返回题库" : "新建试题"}</button></div>}
+            {!filteredQuestions.length && <div className="empty-state"><div>空</div><h3>{showSelected ? "还没有勾选试题" : "这里还没有试题"}</h3><p>{showSelected ? "回到题库勾选需要组卷的题目" : authUser ? "新建一道试题，开始完善共享题库" : "登录后可以录入第一道试题"}</p><button onClick={showSelected ? () => setShowSelected(false) : openNewQuestion}>{showSelected ? "返回题库" : authUser ? "新建试题" : "登录"}</button></div>}
             {filteredQuestions.map((question, index) => {
               const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question);
               const displayStem = question.stemDocxXml?.length ? docxStemDisplayText(question.stemDocxXml) : question.stem;
               return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
-                <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>
+                {authUser && <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
                 <div className="question-main">
                   <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span>{question.diagramSource === "svg-ai" ? <span className="geogebra-badge">高清矢量重绘</span> : question.diagramSource === "geogebra-ai" ? <span className="geogebra-badge">旧版 GeoGebra 重绘</span> : question.originalImage ? <span className="image-badge">图像识别</span> : images.length ? <span className="image-badge">题目配图</span> : null}{question.optimizedAt && <span className="optimized-badge">AI 已优化</span>}<em>{pathOf(question.categoryId)}</em></div>
                   <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}` : ""}`}>
@@ -571,7 +621,7 @@ export default function Home() {
                   </div>
                   {!!question.tags?.length && <div className="tag-row">{question.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
                   {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><p><MathText text={question.analysis} /></p></>}</div>}
-                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? "收起解析" : "查看解析"}</button><span></span><button onClick={() => openEditQuestion(question)}>编辑</button><button onClick={() => duplicateQuestion(question)}>复制</button><button className="danger-text" onClick={() => deleteQuestion(question)}>删除</button></div>
+                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? "收起解析" : "查看解析"}</button>{question.createdByEmail && <small>由 {question.createdByEmail} 录入</small>}<span></span>{authUser && <button onClick={() => duplicateQuestion(question)}>复制到我的题库</button>}{question.canEdit && <><button onClick={() => openEditQuestion(question)}>编辑</button><button className="danger-text" onClick={() => deleteQuestion(question)}>删除</button></>}</div>
                 </div>
               </article>;
             })}
@@ -579,7 +629,7 @@ export default function Home() {
         </section>
       </section>
 
-      <aside className={`paper-dock ${selectedIds.length ? "visible" : ""}`}><div className="dock-count"><strong>{selectedIds.length}</strong><span>已选试题</span></div><div className="dock-title"><span>当前练习</span><b>{paperTitle}</b></div><button className="dock-delete-button" onClick={() => setBatchDeleteOpen(true)}>批量删除</button><button className="ghost-button" onClick={() => setSelectedIds([])}>清空</button><button className="export-button" onClick={() => setExportDialog(true)}>生成 Word <span>→</span></button></aside>
+      {authUser && <aside className={`paper-dock ${selectedIds.length ? "visible" : ""}`}><div className="dock-count"><strong>{selectedIds.length}</strong><span>已选试题</span></div><div className="dock-title"><span>当前练习</span><b>{paperTitle}</b></div>{selectedIds.some((id) => questions.find((item) => item.id === id)?.canEdit) && <button className="dock-delete-button" onClick={() => setBatchDeleteOpen(true)}>删除可管理题目</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>清空</button><button className="export-button" onClick={() => setExportDialog(true)}>生成 Word <span>→</span></button></aside>}
 
       {questionDraft && <div className="modal-backdrop">
         <section className="modal question-modal" role="dialog" aria-modal="true" aria-label="试题编辑" onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); if (entryMode === "screenshot") handleQuestionImage(file); else handleManualImages([file]); } }}>
@@ -617,7 +667,7 @@ export default function Home() {
             <div className="optimization-changes"><b>本次调整</b><span>{optimizationPreview.changes.join("；")}</span></div>
             <div className="optimization-actions"><button className="text-button" onClick={() => setOptimizationPreview(null)}>暂不采用</button><button className="primary-button" onClick={applyOptimization}>采用优化结果</button></div>
           </section>}
-          <div className="modal-actions"><small className="save-note">文字、配图和排版设置都保存在本机</small><button className="ai-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" onClick={() => setQuestionDraft(null)}>取消</button><button className="primary-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>确认并保存</button></div>
+          <div className="modal-actions"><small className="save-note">文字与配图将保存到共享云端题库</small><button className="ai-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" onClick={() => setQuestionDraft(null)}>取消</button><button className="primary-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>确认并保存</button></div>
         </section>
       </div>}
 
@@ -658,11 +708,21 @@ export default function Home() {
         <div className="modal-actions"><button className="secondary" onClick={() => setCropDialog(false)}>取消</button><button className="primary-button" onClick={applyManualCrop}>使用这个范围</button></div>
       </section></div>}
 
-      {categoryDialog && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理"><div className="modal-head"><div><span className="eyebrow">知识目录</span><h2>{categoryDialog === "new" ? "新建分类" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>{categoryDialog === "new" ? <><label className="field">分类名称<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：二次函数" /></label><label className="field">上级分类<select value={categoryParent} onChange={(event) => setCategoryParent(event.target.value)}><option value="">无（设为顶级分类）</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div></> : <><div className="manage-list">{categories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span><button onClick={() => deleteCategory(item)}>删除</button></div>)}</div><div className="data-tools"><div><b>题库备份</b><small>换电脑或清理浏览器前，建议导出一份备份。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div><div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋ 新建分类</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div></>}</section></div>}
+      {categoryDialog && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理"><div className="modal-head"><div><span className="eyebrow">知识目录</span><h2>{categoryDialog === "new" ? "新建分类" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>{categoryDialog === "new" ? <><label className="field">分类名称<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：二次函数" /></label><label className="field">上级分类<select value={categoryParent} onChange={(event) => setCategoryParent(event.target.value)}><option value="">无（设为顶级分类）</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div></> : <><div className="manage-list">{categories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{authUser?.role === "admin" && <button onClick={() => deleteCategory(item)}>删除</button>}</div>)}</div><div className="data-tools"><div><b>云端题库备份</b><small>导入会追加到云端；导出可保存一份本地副本。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>迁移本地备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div><div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋ 新建分类</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div></>}</section></div>}
 
       {exportDialog && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="生成 Word"><div className="modal-head"><div><span className="eyebrow">Word 组卷</span><h2>生成练习题</h2></div><button className="close" onClick={() => setExportDialog(false)}>×</button></div><div className="export-summary"><strong>{selectedIds.length}</strong><span>道试题将按勾选顺序排入文档</span></div><label className="field">练习标题<input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} /></label><label className="toggle-row" aria-label="答案设置"><input type="checkbox" checked={includeAnswers} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label><div className="modal-actions"><button className="secondary" onClick={() => setExportDialog(false)}>取消</button><button className="primary-button" onClick={generateWord}>下载 .docx</button></div></section></div>}
 
       {batchDeleteOpen && <div className="modal-backdrop"><section className="modal delete-modal" role="dialog" aria-modal="true" aria-label="批量删除试题"><div className="modal-head"><div><span className="eyebrow">危险操作</span><h2>批量删除试题</h2></div><button className="close" onClick={() => setBatchDeleteOpen(false)}>×</button></div><div className="delete-summary"><strong>{selectedIds.length}</strong><div><b>道已选试题将从题库中删除</b><p>已导出的 Word 不受影响，但题库中的数据删除后无法恢复。需要保留时，请先导出题库备份。</p></div></div><div className="modal-actions"><button className="secondary" onClick={() => setBatchDeleteOpen(false)}>取消</button><button className="danger-button" onClick={deleteSelectedQuestions}>确认删除 {selectedIds.length} 道</button></div></section></div>}
+      {authDialog && <div className="modal-backdrop"><section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === "login" ? "登录" : "注册"}>
+        <div className="modal-head"><div><span className="eyebrow">Mitty 云端题库</span><h2>{authMode === "login" ? "邮箱登录" : "使用邀请码注册"}</h2></div><button className="close" onClick={() => setAuthDialog(false)}>×</button></div>
+        <div className="auth-tabs"><button className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthError(""); }}>登录</button><button className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthError(""); }}>注册</button></div>
+        <label className="field">邮箱<input type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="name@example.com" /></label>
+        <label className="field">密码<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="至少 8 个字符" onKeyDown={(event) => { if (event.key === "Enter") submitAuth(); }} /></label>
+        {authMode === "register" && <label className="field">邀请码<input value={authInvite} onChange={(event) => setAuthInvite(event.target.value)} placeholder="请输入管理员提供的邀请码" onKeyDown={(event) => { if (event.key === "Enter") submitAuth(); }} /></label>}
+        {authError && <div className="recognition-error"><b>{authMode === "login" ? "登录未完成" : "注册未完成"}</b><span>{authError}</span></div>}
+        <p className="auth-note">访客无需登录即可浏览题目；注册后可以录题、组卷和下载 Word。普通会员只能修改自己录入的题目。</p>
+        <div className="modal-actions"><button className="secondary" onClick={() => setAuthDialog(false)}>取消</button><button className="primary-button" disabled={authSubmitting || !authEmail || !authPassword || (authMode === "register" && !authInvite)} onClick={submitAuth}>{authSubmitting ? "请稍候…" : authMode === "login" ? "登录" : "注册并登录"}</button></div>
+      </section></div>}
       {notice && <div className="toast">✓ {notice}</div>}
     </main>
   );

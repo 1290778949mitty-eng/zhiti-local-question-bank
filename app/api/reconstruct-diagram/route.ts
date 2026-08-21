@@ -1,5 +1,6 @@
 import { validateVectorDiagramPlan } from "../../../lib/vector-diagram-reconstruction.mjs";
 import type { VectorDiagramPlan } from "../../../lib/types";
+import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
 
 const pointSchema = { type: "object", additionalProperties: false, properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] };
 const strokeSchema = { type: "object", additionalProperties: false, properties: { id: { type: "string" }, points: { type: "array", items: pointSchema }, closed: { type: "boolean" }, width: { type: "number" }, color: { type: "string" }, dash: { type: "array", items: { type: "number" } } }, required: ["id", "points", "closed", "width", "color", "dash"] };
@@ -38,6 +39,8 @@ async function callChat(base: string, apiKey: string, model: string, prompt: str
 
 export async function POST(request: Request) {
   try {
+    requireSameOrigin(request);
+    await requireUser(request);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return Response.json({ error: "尚未配置智能重绘", code: "MISSING_API_KEY" }, { status: 503 });
     const body = await request.json() as { image?: string; stem?: string; qualityIssues?: string[]; imageAspectRatio?: number; previousPlan?: VectorDiagramPlan; fitFeedback?: string[] };

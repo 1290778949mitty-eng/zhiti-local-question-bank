@@ -104,6 +104,7 @@ export type Category = {
   name: string;
   parentId: string | null;
   createdAt: number;
+  createdBy?: string | null;
 };
 
 export type Question = {
@@ -145,6 +146,15 @@ export type Question = {
   sourcePage?: number;
   createdAt: number;
   updatedAt: number;
+  createdBy?: string | null;
+  createdByEmail?: string | null;
+  canEdit?: boolean;
 };
 
 export type LibraryData = { categories: Category[]; questions: Question[] };
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  role: "admin" | "member";
+};
