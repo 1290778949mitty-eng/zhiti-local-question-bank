@@ -34,6 +34,8 @@ ADMIN_EMAIL=管理员邮箱
 REGISTRATION_INVITE_CODE=邀请码
 ```
 
+AI 地址、Key 和 Luna 模型名继续保存在未提交的 `.env.local`。`npm run dev` 会在启动前把两份本地配置安全合并到 Worker 使用的 `.dev.vars`，不会把密钥提交到 GitHub。
+
 ## 部署
 
 ```bash
