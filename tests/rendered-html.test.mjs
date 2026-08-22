@@ -225,6 +225,6 @@ test("routes every AI feature through the native Antigravity Gemini adapter", as
     const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
     assert.match(source, /mode === "antigravity_gemini"/);
     assert.match(source, /callAntigravityGemini/);
-    assert.match(source, /gemini-3-flash/);
+    assert.match(source, /gemini-3\.7-flash/);
   }
 });
