@@ -9,6 +9,7 @@ type AppEnv = {
 
 const COOKIE_NAME = "zhiti_session";
 const SESSION_DAYS = 30;
+const LOCAL_ADMIN: AuthUser = { id: "local-admin", email: "localhost", role: "admin", local: true };
 // Cloudflare Workers Web Crypto currently caps PBKDF2 at 100,000 iterations.
 const PASSWORD_ITERATIONS = 100_000;
 
@@ -85,7 +86,23 @@ function cookieValue(request: Request, name: string) {
   return "";
 }
 
+export function isLocalRequest(request: Request) {
+  const hostname = new URL(request.url).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost");
+}
+
+async function ensureLocalAdmin() {
+  await appEnv().DB.prepare(`
+    INSERT OR IGNORE INTO users (id, email, password_hash, password_salt, password_iterations, role, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(LOCAL_ADMIN.id, "localhost@local.invalid", "local-only", "local-only", 1, LOCAL_ADMIN.role, 0).run();
+}
+
 export async function currentUser(request: Request): Promise<AuthUser | null> {
+  if (isLocalRequest(request)) {
+    await ensureLocalAdmin();
+    return LOCAL_ADMIN;
+  }
   const token = cookieValue(request, COOKIE_NAME);
   if (!token) return null;
   const tokenHash = await sha256(token);

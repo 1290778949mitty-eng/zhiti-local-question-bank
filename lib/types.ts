@@ -157,4 +157,5 @@ export type AuthUser = {
   id: string;
   email: string;
   role: "admin" | "member";
+  local?: boolean;
 };

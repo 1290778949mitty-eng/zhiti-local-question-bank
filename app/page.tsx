@@ -583,7 +583,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><span className="brand-mark">题</span><div><strong>Mitty</strong><span>的宝藏题库</span></div></div>
         <nav aria-label="主导航"><button className={`nav-item ${!showSelected ? "active" : ""}`} onClick={() => setShowSelected(false)}>题库</button>{authUser && <button className={`nav-item ${showSelected ? "active" : ""}`} onClick={() => setShowSelected(true)}>我的组卷{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button>}</nav>
-        <div className="account-area">{authLoading ? <span className="guest-badge">正在连接云端…</span> : authUser ? <><span className="user-chip"><b>{authUser.role === "admin" ? "管理员" : "会员"}</b>{authUser.email}</span><button className="account-button" onClick={signOut}>退出</button><button className="primary-button" onClick={openNewQuestion}><span>＋</span> 新建试题</button></> : <><span className="guest-badge">访客 · 仅浏览</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>登录 / 注册</button></>}</div>
+        <div className="account-area">{authLoading ? <span className="guest-badge">正在连接云端…</span> : authUser ? <><span className="user-chip"><b>{authUser.local ? "本地管理员" : authUser.role === "admin" ? "管理员" : "会员"}</b>{authUser.local ? "无需登录" : authUser.email}</span>{!authUser.local && <button className="account-button" onClick={signOut}>退出</button>}<button className="primary-button" onClick={openNewQuestion}><span>＋</span> 新建试题</button></> : <><span className="guest-badge">访客 · 仅浏览</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>登录 / 注册</button></>}</div>
       </header>
 
       <section className="workspace">
@@ -595,7 +595,7 @@ export default function Home() {
 
         <section className="content">
           <div className="content-head">
-            <div><p className="breadcrumb">{showSelected ? "组卷篮" : activeCategory ? pathOf(activeCategory) : "题库"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · 云端共享题库{authUser ? ` · 已登录为${authUser.role === "admin" ? "管理员" : "会员"}` : " · 访客可直接浏览"}</p></div>
+            <div><p className="breadcrumb">{showSelected ? "组卷篮" : activeCategory ? pathOf(activeCategory) : "题库"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · 云端共享题库{authUser ? authUser.local ? " · localhost 本地管理员" : ` · 已登录为${authUser.role === "admin" ? "管理员" : "会员"}` : " · 访客可直接浏览"}</p></div>
             <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索试题" placeholder="搜索题干、答案、来源…" /></label>
           </div>
           <div className="filters">
