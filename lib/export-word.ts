@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { splitMathText } from "./math-text";
 import { needsWordMathEquation, normalizeMathNotation } from "./math-notation.mjs";
 import { questionImages, resolveQuestionImageLayout } from "./question-layout";
+import { resolveWordImageSource } from "./word-image-source.mjs";
 import type { Question } from "./types";
 
 const typeOrder = ["单选题", "多选题", "填空题", "判断题", "解答题"];
@@ -153,13 +154,17 @@ function optionTable(options: string[]) {
   });
 }
 
-async function imageParagraph(dataUrl: string, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER): Promise<Paragraph> {
-  const [header, encoded] = dataUrl.split(",");
-  const type = header.includes("jpeg") || header.includes("jpg") ? "jpg" : "png";
-  const binary = atob(encoded); const data = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) data[index] = binary.charCodeAt(index);
+type ResolvedWordImage = Awaited<ReturnType<typeof resolveWordImageSource>>;
+
+async function imageParagraphFromSource(source: string, resolveImage: (source: string) => Promise<ResolvedWordImage>, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER): Promise<Paragraph> {
+  const { data, mimeType, type } = await resolveImage(source);
   const dimensions = await new Promise<{ width: number; height: number }>((resolve) => {
-    const image = new Image(); image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight }); image.onerror = () => resolve({ width: 600, height: 360 }); image.src = dataUrl;
+    const objectUrl = URL.createObjectURL(new Blob([data], { type: mimeType }));
+    const image = new Image();
+    const finish = (value: { width: number; height: number }) => { URL.revokeObjectURL(objectUrl); resolve(value); };
+    image.onload = () => finish({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => finish({ width: 600, height: 360 });
+    image.src = objectUrl;
   });
   const scale = Math.min(1, maxWidth / dimensions.width, maxHeight / dimensions.height);
   const width = Math.round(dimensions.width * scale); const height = Math.round(dimensions.height * scale);
@@ -167,6 +172,14 @@ async function imageParagraph(dataUrl: string, maxWidth = 300, maxHeight = 210, 
 }
 
 export async function buildQuestionsWordBlob(questions: Question[], title: string, includeAnswers: boolean) {
+  const imageCache = new Map<string, Promise<ResolvedWordImage>>();
+  const resolveImage = (source: string) => {
+    let pending = imageCache.get(source);
+    if (!pending) { pending = resolveWordImageSource(source); imageCache.set(source, pending); }
+    return pending;
+  };
+  const imageParagraph = (source: string, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER) =>
+    imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment);
   const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: number }> = [];
   const children: Array<Paragraph | Table> = [
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }),
@@ -246,7 +259,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
   if (rawParagraphs.length) {
     let documentXml = await archive.file("word/document.xml")!.async("text");
     let relationshipsXml = await archive.file("word/_rels/document.xml.rels")!.async("text");
-    let analysisImageIndex = 0;
+    let embeddedImageIndex = 0;
     for (const replacement of rawParagraphs) {
       const placeholderParagraph = new RegExp(`<w:p\\b[^>]*>(?:(?!<w:p\\b)[\\s\\S])*?${replacement.token}(?:(?!<w:p\\b)[\\s\\S])*?<\\/w:p>`);
       // XMLSerializer can expose Word's linear-math `\\frac` escape as a form-feed
@@ -255,13 +268,11 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
       let safeParagraphXml = sanitizeXml10(replacement.xml);
       if (replacement.questionNumber != null) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}[.．、]/, `$1${replacement.questionNumber}．`);
       for (const oldId of Array.from(safeParagraphXml.matchAll(/r:embed="([^"]+)"/g), (match) => match[1])) {
-        const dataUrl = replacement.assets?.[oldId]; if (!dataUrl) continue;
-        analysisImageIndex += 1;
-        const extension = dataUrl.startsWith("data:image/jpeg") ? "jpg" : dataUrl.startsWith("data:image/gif") ? "gif" : "png";
-        const fileName = `zhiti-analysis-${analysisImageIndex}.${extension}`;
-        const newId = `rIdZhitiAnalysis${analysisImageIndex}`;
-        const encoded = dataUrl.split(",")[1] ?? ""; const binary = atob(encoded); const data = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index += 1) data[index] = binary.charCodeAt(index);
+        const source = replacement.assets?.[oldId]; if (!source) continue;
+        embeddedImageIndex += 1;
+        const { data, type } = await resolveImage(source);
+        const fileName = `zhiti-embedded-${embeddedImageIndex}.${type}`;
+        const newId = `rIdZhitiEmbedded${embeddedImageIndex}`;
         archive.file(`word/media/${fileName}`, data);
         relationshipsXml = relationshipsXml.replace("</Relationships>", `<Relationship Id="${newId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${fileName}"/></Relationships>`);
         safeParagraphXml = safeParagraphXml.replaceAll(`r:embed="${oldId}"`, `r:embed="${newId}"`);
