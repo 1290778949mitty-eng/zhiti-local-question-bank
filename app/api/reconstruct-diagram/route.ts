@@ -1,6 +1,7 @@
 import { validateVectorDiagramPlan } from "../../../lib/vector-diagram-reconstruction.mjs";
 import type { VectorDiagramPlan } from "../../../lib/types";
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
+import { callAntigravityGemini } from "../../../lib/server/antigravity-gemini";
 
 const pointSchema = { type: "object", additionalProperties: false, properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] };
 const strokeSchema = { type: "object", additionalProperties: false, properties: { id: { type: "string" }, points: { type: "array", items: pointSchema }, closed: { type: "boolean" }, width: { type: "number" }, color: { type: "string" }, dash: { type: "array", items: { type: "number" } } }, required: ["id", "points", "closed", "width", "color", "dash"] };
@@ -67,8 +68,10 @@ ${correctionContext}
 6. 题干用于确认点名、共线、中点、垂直和交点关系；原图用于决定视觉坐标。geogebra_commands 可选写安全的 GeoGebra 英文构造命令供后台核对数学关系，但这些命令不会参与最终出图，也不得改变 strokes 坐标。
 7. 仅处理平面几何、坐标系和函数图。若关键线段或标签完全看不清，should_reconstruct=false 并说明原因；宁可保留增强后的原图，也不要猜测。
 8. expected_labels 列出题干点名且图中应出现的标签；constraints 用中文记录已核对的数学关系；warnings 记录无法确认的细节。confidence 综合反映识别与视觉复刻把握。`;
-    const base = apiBase(); const model = process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna"; const mode = process.env.OPENAI_API_MODE || "auto";
-    let result = mode === "chat_completions" ? await callChat(base, apiKey, model, prompt, body.image) : await callResponses(base, apiKey, model, prompt, body.image);
+    const base = apiBase(); const model = process.env.OPENAI_VISION_MODEL || "gemini-3-flash"; const mode = process.env.OPENAI_API_MODE || "auto";
+    let result = mode === "antigravity_gemini"
+      ? await callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", apiKey, model, prompt, [body.image], schema)
+      : mode === "chat_completions" ? await callChat(base, apiKey, model, prompt, body.image) : await callResponses(base, apiKey, model, prompt, body.image);
     if ((!result.text || result.status >= 400) && mode === "auto") result = await callChat(base, apiKey, model, prompt, body.image);
     if (!result.text) return Response.json({ error: result.error || "中转站没有返回可用的重绘方案" }, { status: result.status >= 400 ? result.status : 502 });
     const raw = parseResult(result.text) as { should_reconstruct: boolean; refusal_reason: string; diagram_type: VectorDiagramPlan["diagramType"]; confidence: number; strokes: VectorDiagramPlan["strokes"]; ellipses: VectorDiagramPlan["ellipses"]; labels: Array<{ text: string; x: number; y: number; font_size: number; color: string; italic: boolean; bold: boolean; anchor: "start" | "middle" | "end" }>; markers: VectorDiagramPlan["markers"]; expected_labels: string[]; constraints: string[]; geogebra_commands: string[]; warnings: string[] };

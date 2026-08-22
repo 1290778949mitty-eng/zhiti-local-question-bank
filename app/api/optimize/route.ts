@@ -1,4 +1,5 @@
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
+import { callAntigravityGemini } from "../../../lib/server/antigravity-gemini";
 
 const schema = {
   type: "object",
@@ -105,9 +106,11 @@ export async function POST(request: Request) {
 标签：${JSON.stringify(body.tags ?? [])}
 配图数量：${images.length}`;
     const base = apiBase();
-    const model = process.env.OPENAI_TEXT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
+    const model = process.env.OPENAI_TEXT_MODEL || process.env.OPENAI_VISION_MODEL || "gemini-3-flash";
     const mode = process.env.OPENAI_API_MODE || "auto";
-    let result = mode === "chat_completions" ? await callChatCompletions(base, apiKey, model, prompt, images) : await callResponses(base, apiKey, model, prompt, images);
+    let result = mode === "antigravity_gemini"
+      ? await callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", apiKey, model, prompt, images, schema)
+      : mode === "chat_completions" ? await callChatCompletions(base, apiKey, model, prompt, images) : await callResponses(base, apiKey, model, prompt, images);
     if ((!result.text || result.status >= 400) && mode === "auto") {
       const firstError = result.error;
       result = await callChatCompletions(base, apiKey, model, prompt, images);

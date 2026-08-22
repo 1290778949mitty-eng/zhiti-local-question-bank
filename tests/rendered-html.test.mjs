@@ -211,3 +211,20 @@ test("does not store AI meta commentary as an answer or analysis", () => {
   assert.equal(cleanRecognizedAnalysis("截图中可见一道选择题，未见明确答案或解析，因此 answer 和解析相关字段留空。"), "");
   assert.equal(cleanRecognizedAnalysis("由勾股定理可得 AB=5。"), "由勾股定理可得 AB=5。");
 });
+
+test("routes every AI feature through the native Antigravity Gemini adapter", async () => {
+  const adapter = await readFile(new URL("../lib/server/antigravity-gemini.ts", import.meta.url), "utf8");
+  assert.match(adapter, /\/antigravity\/v1beta/);
+  assert.match(adapter, /:generateContent/);
+  assert.match(adapter, /responseMimeType:\s*"application\/json"/);
+  assert.match(adapter, /responseSchema:\s*geminiResponseSchema\(schema\)/);
+  assert.match(adapter, /nullable:\s*true/);
+  assert.match(adapter, /inlineData:\s*\{\s*mimeType:/);
+
+  for (const route of ["optimize", "recognize", "recognize-batch", "reconstruct-diagram"]) {
+    const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
+    assert.match(source, /mode === "antigravity_gemini"/);
+    assert.match(source, /callAntigravityGemini/);
+    assert.match(source, /gemini-3-flash/);
+  }
+});
