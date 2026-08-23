@@ -22,6 +22,7 @@
     "docx": "^9.7.1",
     "docx-preview": "^0.4.0",
     "drizzle-orm": "0.45.2",
+    "fast-xml-parser": "^5.11.0",
     "html2canvas": "^1.4.1",
     "jszip": "^3.10.1",
     "katex": "^0.18.4",

@@ -3,12 +3,16 @@ export type Difficulty = "基础" | "中等" | "提高";
 export type ImageLayout = "right" | "below" | "below-right";
 export type DiagramKind = "geometry" | "coordinate" | "function" | "unsupported";
 export type DiagramSource = "extracted" | "geogebra-ai" | "svg-ai" | "manual";
+export type DiagramCapture = "digital" | "scan" | "photo";
+export type DiagramRotation = 0 | 90 | 180 | 270;
 
 export type DiagramQuality = {
   score: number;
   reconstructable: boolean;
   kind: DiagramKind;
   issues: string[];
+  capture?: DiagramCapture;
+  rotation?: DiagramRotation;
 };
 
 export type GeoGebraStyle = {
@@ -97,6 +101,7 @@ export type VectorDiagramPlan = {
   constraints: string[];
   geogebraCommands: string[];
   warnings: string[];
+  excludedAnnotations?: string[];
 };
 
 export type Category = {
@@ -117,6 +122,8 @@ export type Question = {
   stemDocxXml?: string[];
   stemDocxAssets?: Record<string, string>;
   options: string[];
+  optionsDocxXml?: string[];
+  optionsDocxAssets?: Record<string, string>;
   answer: string;
   analysis: string;
   analysisDocxXml?: string[];
@@ -141,6 +148,8 @@ export type Question = {
   diagramReconstructedAt?: number;
   diagramBox?: { x: number; y: number; width: number; height: number };
   recognitionConfidence?: number;
+  recognitionDurationMs?: number;
+  diagramReconstructionDurationMs?: number;
   recognitionWarnings?: string[];
   importFileName?: string;
   sourcePage?: number;

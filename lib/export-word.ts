@@ -2,8 +2,9 @@ import { AlignmentType, BorderStyle, Document, ImageRun, Math as WordMath, MathF
 import JSZip from "jszip";
 import { splitMathText } from "./math-text";
 import { needsWordMathEquation, normalizeMathNotation } from "./math-notation.mjs";
-import { questionImages, resolveQuestionImageLayout } from "./question-layout";
+import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout } from "./question-layout";
 import { resolveWordImageSource } from "./word-image-source.mjs";
+import { enlargeNestedWordMath, ensureWordMathSettings } from "./word-math-sizing.mjs";
 import type { Question } from "./types";
 
 const typeOrder = ["单选题", "多选题", "填空题", "判断题", "解答题"];
@@ -54,7 +55,7 @@ const latexSymbols: Record<string, string> = {
 const superscripts: Record<string, string> = { "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁺": "+", "⁻": "−" };
 
 function mathComponents(source: string): MathComponent[] {
-  const text = normalizeMathNotation(source).replace(/\*\*/g, "^").replace(/（/g, "(").replace(/）/g, ")").replace(/＝/g, "=").replace(/＋/g, "+").replace(/－/g, "−");
+  const text = normalizeMathNotation(source).replace(/\*\*/g, "^").replace(/（/g, "(").replace(/）/g, ")").replace(/＝/g, "=").replace(/＋/g, "+").replace(/－/g, "−").replace(/＜/g, "<").replace(/＞/g, ">");
   const cursor = { index: 0 };
 
   function group(): MathComponent[] {
@@ -128,7 +129,7 @@ function richText(text: string, style: RunStyle = {}): ParagraphChild[] {
     : textRuns(segment.value, BODY_SIZE, { ...style, italicMath: true }));
 }
 
-function optionTable(options: string[]) {
+function optionTable(options: string[], compact = false) {
   const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const columnCount = options.length <= 4 && options.every((option) => option.length <= 12) ? 4 : 2;
   const cellWidth = Math.floor(9746 / columnCount);
@@ -139,8 +140,8 @@ function optionTable(options: string[]) {
       const index = start + offset; const option = options[index];
       cells.push(new TableCell({
         width: { size: cellWidth, type: WidthType.DXA },
-        margins: { top: 40, bottom: 80, left: 180, right: 120 },
-        children: [new Paragraph({ spacing: { line: 360 }, children: option == null ? [] : [...textRuns(`${optionLabels[index]}．`), ...richText(option)] })],
+        margins: { top: compact ? 0 : 40, bottom: compact ? 40 : 80, left: 180, right: 120 },
+        children: [new Paragraph({ spacing: { line: compact ? 300 : 360 }, children: option == null ? [] : [...textRuns(`${optionLabels[index]}．`), ...richText(option)] })],
       }));
     }
     rows.push(new TableRow({ children: cells }));
@@ -156,7 +157,7 @@ function optionTable(options: string[]) {
 
 type ResolvedWordImage = Awaited<ReturnType<typeof resolveWordImageSource>>;
 
-async function imageParagraphFromSource(source: string, resolveImage: (source: string) => Promise<ResolvedWordImage>, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER): Promise<Paragraph> {
+async function imageParagraphFromSource(source: string, resolveImage: (source: string) => Promise<ResolvedWordImage>, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER, before = 80): Promise<Paragraph> {
   const { data, mimeType, type } = await resolveImage(source);
   const dimensions = await new Promise<{ width: number; height: number }>((resolve) => {
     const objectUrl = URL.createObjectURL(new Blob([data], { type: mimeType }));
@@ -168,7 +169,7 @@ async function imageParagraphFromSource(source: string, resolveImage: (source: s
   });
   const scale = Math.min(1, maxWidth / dimensions.width, maxHeight / dimensions.height);
   const width = Math.round(dimensions.width * scale); const height = Math.round(dimensions.height * scale);
-  return new Paragraph({ alignment, spacing: { before: 80, after }, children: [new ImageRun({ data, type, transformation: { width, height } })] });
+  return new Paragraph({ alignment, spacing: { before, after }, children: [new ImageRun({ data, type, transformation: { width, height } })] });
 }
 
 export async function buildQuestionsWordBlob(questions: Question[], title: string, includeAnswers: boolean) {
@@ -178,8 +179,8 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
     if (!pending) { pending = resolveWordImageSource(source); imageCache.set(source, pending); }
     return pending;
   };
-  const imageParagraph = (source: string, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER) =>
-    imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment);
+  const imageParagraph = (source: string, maxWidth = 300, maxHeight = 210, after = 140, alignment = AlignmentType.CENTER, before = 80) =>
+    imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment, before);
   const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: number }> = [];
   const children: Array<Paragraph | Table> = [
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }),
@@ -197,6 +198,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
       renderedQuestions.push(question);
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
+      const compactConclusion = isCompactConclusionQuestion(question);
       if (question.stemDocxXml?.length) {
         question.stemDocxXml.forEach((xml, rawIndex) => {
           const token = `__ZHITI_RAW_STEM_${rawParagraphs.length}__`;
@@ -204,12 +206,14 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
           children.push(new Paragraph({ children: textRuns(token) }));
         });
       } else {
-        const stem = new Paragraph({ spacing: { after: stemParagraphs.length > 1 ? 40 : 100, line: 360 }, children: [...textRuns(`${number}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText(stemParagraphs[0] ?? question.stem)] });
+        const stem = new Paragraph({ spacing: { after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100, line: compactConclusion ? 300 : 360 }, children: [...textRuns(`${number}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText(stemParagraphs[0] ?? question.stem)] });
         const images = questionImages(question);
         children.push(stem);
-        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: 40, line: 360 }, children: richText(continuation) }));
+        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: compactConclusion ? 0 : 40, line: compactConclusion ? 300 : 360 }, children: richText(continuation) }));
         const imageLayout = resolveQuestionImageLayout(question);
-        if (images.length && imageLayout === "right") {
+        if (images.length && compactConclusion) {
+          for (const image of images) children.push(await imageParagraph(image, 195, 155, 30, AlignmentType.LEFT, 20));
+        } else if (images.length && imageLayout === "right") {
           children.push(await imageParagraph(images[0], 220, 165, 80, AlignmentType.RIGHT));
           for (const image of images.slice(1)) children.push(await imageParagraph(image, 280, 195));
         } else if (images.length && imageLayout === "below-right") {
@@ -218,8 +222,14 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
           for (const image of images) children.push(await imageParagraph(image, 300, 210));
         }
       }
-      if (question.options.length) {
-        children.push(optionTable(question.options));
+      if (question.optionsDocxXml?.length) {
+        question.optionsDocxXml.forEach((xml) => {
+          const token = `__ZHITI_RAW_OPTIONS_${rawParagraphs.length}__`;
+          rawParagraphs.push({ token, xml, assets: question.optionsDocxAssets });
+          children.push(new Paragraph({ children: textRuns(token) }));
+        });
+      } else if (question.options.length) {
+        children.push(optionTable(question.options, compactConclusion));
         children.push(new Paragraph({ spacing: { after: 80 }, children: textRuns("　") }));
       } else {
         const answerLines = question.type === "解答题" ? 5 : 1;
@@ -256,8 +266,10 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
   const packedBlob = await Packer.toBlob(doc);
   const archive = await JSZip.loadAsync(await packedBlob.arrayBuffer());
   archive.file("word/fontTable.xml", FONT_TABLE_XML);
+  const settingsXml = await archive.file("word/settings.xml")!.async("text");
+  archive.file("word/settings.xml", ensureWordMathSettings(settingsXml));
+  let documentXml = await archive.file("word/document.xml")!.async("text");
   if (rawParagraphs.length) {
-    let documentXml = await archive.file("word/document.xml")!.async("text");
     let relationshipsXml = await archive.file("word/_rels/document.xml.rels")!.async("text");
     let embeddedImageIndex = 0;
     for (const replacement of rawParagraphs) {
@@ -279,10 +291,10 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
       }
       documentXml = documentXml.replace(placeholderParagraph, () => safeParagraphXml);
     }
-    documentXml = sanitizeXml10(documentXml);
-    archive.file("word/document.xml", documentXml);
     archive.file("word/_rels/document.xml.rels", relationshipsXml);
   }
+  documentXml = enlargeNestedWordMath(sanitizeXml10(documentXml));
+  archive.file("word/document.xml", documentXml);
   const blob = await archive.generateAsync({
     type: "blob",
     mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

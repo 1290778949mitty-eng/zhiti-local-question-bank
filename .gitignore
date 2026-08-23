@@ -42,4 +42,5 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/artifacts/
 *.tsbuildinfo

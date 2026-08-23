@@ -50,6 +50,13 @@ function responseText(payload: Record<string, unknown>) {
   return text || undefined;
 }
 
+function thinkingLevel(effort: string) {
+  if (effort === "none") return "MINIMAL";
+  if (effort === "low") return "LOW";
+  if (effort === "medium") return "MEDIUM";
+  return "HIGH";
+}
+
 export async function callAntigravityGemini(
   configuredBase: string,
   apiKey: string,
@@ -57,6 +64,7 @@ export async function callAntigravityGemini(
   prompt: string,
   images: string[],
   schema: JsonSchema,
+  reasoningEffort = "high",
 ): Promise<AntigravityResult> {
   const imageParts = images.map(inlineImage).filter((part): part is NonNullable<typeof part> => Boolean(part));
   const endpoint = `${antigravityApiBase(configuredBase)}/models/${encodeURIComponent(model)}:generateContent`;
@@ -66,6 +74,7 @@ export async function callAntigravityGemini(
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }, ...imageParts] }],
       generationConfig: {
+        thinkingConfig: { thinkingLevel: thinkingLevel(reasoningEffort) },
         responseMimeType: "application/json",
         responseSchema: geminiResponseSchema(schema),
       },

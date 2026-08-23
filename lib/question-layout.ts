@@ -1,5 +1,5 @@
 import type { ImageLayout, Question } from "./types";
-import { automaticQuestionImageLayout } from "./question-presentation-rules.mjs";
+import { automaticQuestionImageLayout, isCompactConclusionChoice } from "./question-presentation-rules.mjs";
 
 const geometrySignals = /(?:△|∠|三角形|四边形|平行四边形|梯形|菱形|正方形|长方形|圆|弧|切线|弦|几何|全等|相似|勾股|线段|垂直|平行)/;
 
@@ -13,10 +13,21 @@ export function isGeometryQuestion(question: Question) {
   return questionImages(question).length === 1 && geometrySignals.test(context);
 }
 
+export function isCompactConclusionQuestion(question: Question) {
+  return isCompactConclusionChoice({
+    type: question.type,
+    stem: question.stem,
+    imageCount: questionImages(question).length,
+    optionCount: question.options.length,
+  });
+}
+
 export function resolveQuestionImageLayout(question: Question): ImageLayout {
   const imageCount = questionImages(question).length;
   const paragraphCount = question.stemParagraphs?.filter((paragraph) => paragraph.trim()).length ?? question.stem.split(/\r?\n/).filter((paragraph) => paragraph.trim()).length;
-  const automaticLayout = automaticQuestionImageLayout({ imageCount, stemLength: question.stem.length, paragraphCount });
+  const compactConclusion = isCompactConclusionQuestion(question);
+  const automaticLayout = automaticQuestionImageLayout({ imageCount, stemLength: question.stem.length, paragraphCount, type: question.type, stem: question.stem, optionCount: question.options.length });
+  if (compactConclusion) return "below";
   if (automaticLayout && (question.stemDocxXml?.length || !question.imageLayout)) return automaticLayout;
   if (isGeometryQuestion(question)) return "right";
   return question.imageLayout ?? automaticLayout ?? "right";

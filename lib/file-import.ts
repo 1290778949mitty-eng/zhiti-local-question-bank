@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
 import type { QuestionType } from "./types";
 
@@ -9,6 +10,9 @@ export type StructuredDocxQuestion = {
   stemParagraphs: string[];
   stemDocxXml: string[];
   stemDocxAssets: Record<string, string>;
+  options: string[];
+  optionsDocxXml: string[];
+  optionsDocxAssets: Record<string, string>;
   sourcePage: number;
 };
 
@@ -26,8 +30,9 @@ export type ImportPage = {
   sourceQuestions?: StructuredDocxQuestion[];
 };
 
-const MAX_PAGES = 40;
+const MAX_PAGES = 80;
 const MAX_IMAGE_EDGE = 2100;
+const EMPTY_PAGE_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
 function canvasDataUrl(canvas: HTMLCanvasElement, quality = .9) {
   const longest = Math.max(canvas.width, canvas.height);
@@ -57,6 +62,9 @@ function wordNodeText(node: Node, preserveUnderlines = false): string {
     return preserveUnderlines && underline && underlineValue !== "none" ? markDocxUnderline(value) : value;
   }
   if (localName === "oMath") return `$${Array.from(node.childNodes).map((child) => wordNodeText(child, preserveUnderlines)).join("")}$`;
+  if (localName === "tc") return Array.from(node.childNodes).map((child) => wordNodeText(child, preserveUnderlines)).join("").trim();
+  if (localName === "tr") return Array.from(node.childNodes).filter((child) => child.localName === "tc").map((child) => wordNodeText(child, preserveUnderlines)).join("\t");
+  if (localName === "tbl") return Array.from(node.childNodes).filter((child) => child.localName === "tr").map((child) => wordNodeText(child, preserveUnderlines)).join("\n");
   if (localName === "tab") return "\t";
   if (localName === "br" || localName === "cr") return "\n";
   if (localName === "f") {
@@ -112,50 +120,55 @@ function inferFilledAnswer(questionText: string, answeredText: string) {
 
 async function extractDocxParagraphs(buffer: ArrayBuffer) {
   const archive = await JSZip.loadAsync(buffer); const xml = await archive.file("word/document.xml")?.async("text");
-  if (!xml) return { paragraphs: [] as string[], answerSectionStart: -1, answers: {} as Record<string, string>, analyses: {} as Record<string, string>, analysisXml: {} as Record<string, string[]>, analysisAssets: {} as Record<string, Record<string, string>>, questionImages: {} as Record<string, string[]>, options: {} as Record<string, string[]>, questions: [] as StructuredDocxQuestion[] };
+  if (!xml) return { paragraphs: [] as string[], answerSectionStart: -1, pageCount: 0, answers: {} as Record<string, string>, analyses: {} as Record<string, string>, analysisXml: {} as Record<string, string[]>, analysisAssets: {} as Record<string, Record<string, string>>, questionImages: {} as Record<string, string[]>, options: {} as Record<string, string[]>, questions: [] as StructuredDocxQuestion[] };
+  const appXml = await archive.file("docProps/app.xml")?.async("text");
+  const pageCount = appXml ? Number(new DOMParser().parseFromString(appXml, "application/xml").getElementsByTagName("Pages")[0]?.textContent ?? 0) : 0;
   const documentXml = new DOMParser().parseFromString(xml, "application/xml");
   const paragraphNodes = Array.from(documentXml.getElementsByTagName("w:p"));
   const paragraphs = paragraphNodes.map((paragraph) => wordNodeText(paragraph).trim());
-  const paragraphXml = paragraphNodes.map((paragraph) => new XMLSerializer().serializeToString(paragraph));
   const answerSectionStart = paragraphs.findIndex((paragraph) => /(?:参考答案与试题解析|答案与解析|试题解析)/.test(paragraph));
-  const questionEnd = answerSectionStart < 0 ? paragraphs.length : answerSectionStart;
-  const questions: Array<StructuredDocxQuestion & { firstParagraph: string }> = [];
-  let currentType: QuestionType | null = null; let currentQuestion: (StructuredDocxQuestion & { firstParagraph: string }) | null = null;
+  const body = Array.from(documentXml.getElementsByTagName("w:body"))[0];
+  const blockNodes = body ? Array.from(body.childNodes).filter((node) => node.localName === "p" || node.localName === "tbl") : [];
+  const blocks = blockNodes.map((node) => ({ text: wordNodeText(node).trim(), xml: new XMLSerializer().serializeToString(node), kind: node.localName as "p" | "tbl" }));
+  const answerBlockStart = blocks.findIndex((block) => /(?:参考答案与试题解析|答案与解析|试题解析)/.test(block.text));
+  const questionEnd = answerBlockStart < 0 ? blocks.length : answerBlockStart;
+  type ParsedQuestion = StructuredDocxQuestion & { firstParagraph: string; blocks: typeof blocks };
+  const questions: ParsedQuestion[] = [];
+  let currentType: QuestionType | null = null; let currentQuestion: ParsedQuestion | null = null;
   for (let index = 0; index < questionEnd; index += 1) {
-    const paragraph = paragraphs[index]; const detectedType = sectionQuestionType(paragraph);
-    if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(paragraph)) { currentType = detectedType; currentQuestion = null; continue; }
-    if (index > 0 && paragraph === paragraphs[0]) continue;
-    const numberMatch = paragraph.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/);
+    const block = blocks[index]; const detectedType = sectionQuestionType(block.text);
+    if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentQuestion = null; continue; }
+    if (index > 0 && block.text === blocks[0]?.text) continue;
+    const numberMatch = block.kind === "p" ? block.text.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/) : null;
     if (numberMatch && currentType) {
       const firstParagraph = numberMatch[2].trim();
-      currentQuestion = { questionNumber: numberMatch[1], type: currentType, stem: firstParagraph, stemParagraphs: firstParagraph ? [firstParagraph] : [], stemDocxXml: [paragraphXml[index]], stemDocxAssets: {}, sourcePage: 1, firstParagraph };
+      currentQuestion = { questionNumber: numberMatch[1], type: currentType, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, firstParagraph, blocks: [block] };
       questions.push(currentQuestion); continue;
     }
-    if (currentQuestion) {
-      if (paragraph) currentQuestion.stemParagraphs.push(paragraph);
-      if (paragraph || /r:embed="[^"]+"/.test(paragraphXml[index])) currentQuestion.stemDocxXml.push(paragraphXml[index]);
-    }
+    if (currentQuestion && (block.text || block.kind === "tbl" || /r:embed="[^"]+"/.test(block.xml))) currentQuestion.blocks.push(block);
   }
-  questions.forEach((question) => { question.stem = question.stemParagraphs.join("\n"); });
-  const options: Record<string, string[]> = {}; let currentQuestionNumber = "";
-  for (const paragraph of paragraphs.slice(0, answerSectionStart < 0 ? paragraphs.length : answerSectionStart)) {
-    const number = paragraph.match(/^\s*(\d{1,3})[.．、]/)?.[1];
-    if (number) currentQuestionNumber = number;
-    if (!currentQuestionNumber) continue;
-    const matches = Array.from(paragraph.matchAll(/(?:^|\s)([A-F])[.．、]\s*([\s\S]*?)(?=\s+[A-F][.．、]|$)/g));
-    if (matches.length >= 2) options[currentQuestionNumber] = matches.map((match) => match[2].trim());
+  const options: Record<string, string[]> = {};
+  for (const question of questions) {
+    const optionBlocks = question.type === "单选题" || question.type === "多选题" ? question.blocks.filter((block) => isDocxOptionBlock(block.text)) : [];
+    const stemBlocks = question.blocks.filter((block) => !optionBlocks.includes(block));
+    question.options = splitDocxOptionBlocks(optionBlocks.map((block) => block.text));
+    question.optionsDocxXml = optionBlocks.map((block) => block.xml);
+    question.stemParagraphs = stemBlocks.map((block, index) => index === 0 ? block.text.replace(/^\s*\d{1,3}[.．、]\s*/, "") : block.text).filter(Boolean);
+    question.stemDocxXml = stemBlocks.map((block) => block.xml);
+    question.stem = question.stemParagraphs.join("\n");
+    options[question.questionNumber] = question.options;
   }
   const answers: Record<string, string> = {}; const repeatedQuestionText: Record<string, string> = {}; const analysisParts: Record<string, string[]> = {}; const analysisXml: Record<string, string[]> = {}; let currentNumber = ""; let collectingAnalysis = false;
-  for (let index = Math.max(0, answerSectionStart); index < paragraphs.length; index += 1) {
-    const paragraph = paragraphs[index];
-    const numberMatch = paragraph.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/);
+  for (let index = Math.max(0, answerBlockStart); index < blocks.length; index += 1) {
+    const block = blocks[index]; const paragraph = block.text;
+    const numberMatch = block.kind === "p" ? paragraph.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/) : null;
     const number = numberMatch?.[1];
     if (number) { currentNumber = number; collectingAnalysis = false; repeatedQuestionText[number] = numberMatch?.[2].trim() ?? ""; }
     const choice = paragraph.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase();
     if (currentNumber && choice) answers[currentNumber] = choice;
     if (/^【(?:分析|解答|点评)】/.test(paragraph)) collectingAnalysis = true;
     if (currentNumber && collectingAnalysis) {
-      (analysisXml[currentNumber] ??= []).push(paragraphXml[index]);
+      (analysisXml[currentNumber] ??= []).push(block.xml);
       if (paragraph) (analysisParts[currentNumber] ??= []).push(paragraph);
       if (/^【点评】/.test(paragraph)) collectingAnalysis = false;
     }
@@ -182,15 +195,13 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   for (const question of questions) {
     const ids = new Set(question.stemDocxXml.flatMap((item) => Array.from(item.matchAll(/r:embed="([^"]+)"/g), (match) => match[1])));
     question.stemDocxAssets = Object.fromEntries(Array.from(ids).flatMap((id) => imageAssets[id] ? [[id, imageAssets[id]]] : []));
+    const optionIds = new Set(question.optionsDocxXml.flatMap((item) => Array.from(item.matchAll(/r:embed="([^"]+)"/g), (match) => match[1])));
+    question.optionsDocxAssets = Object.fromEntries(Array.from(optionIds).flatMap((id) => imageAssets[id] ? [[id, imageAssets[id]]] : []));
   }
-  const questionImageIds: Record<string, string[]> = {}; let imageQuestionNumber = "";
-  for (let index = 0; index < (answerSectionStart < 0 ? paragraphs.length : answerSectionStart); index += 1) {
-    const number = paragraphs[index].match(/^\s*(\d{1,3})[.．、]/)?.[1];
-    if (number) imageQuestionNumber = number;
-    if (!imageQuestionNumber) continue;
-    for (const match of paragraphXml[index].matchAll(/r:embed="([^"]+)"/g)) (questionImageIds[imageQuestionNumber] ??= []).push(match[1]);
-  }
-  const questionImages = Object.fromEntries(Object.entries(questionImageIds).map(([number, ids]) => [number, ids.flatMap((id) => imageAssets[id] ? [imageAssets[id]] : [])]));
+  const questionImages = Object.fromEntries(questions.map((question) => {
+    const ids = Array.from(new Set([...question.stemDocxXml, ...question.optionsDocxXml].flatMap((item) => Array.from(item.matchAll(/r:embed="([^"]+)"/g), (match) => match[1]))));
+    return [question.questionNumber, ids.flatMap((id) => imageAssets[id] ? [imageAssets[id]] : [])];
+  }));
   const analyses = Object.fromEntries(Object.entries(analysisParts).map(([number, parts]) => [number, parts.join("\n")]));
   for (const question of questions) {
     if (!answers[question.questionNumber] && question.type === "填空题") {
@@ -199,7 +210,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     }
     if (!answers[question.questionNumber] && question.type === "解答题" && analyses[question.questionNumber]) answers[question.questionNumber] = "见解析";
   }
-  return { paragraphs, answerSectionStart, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question) => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, sourcePage: question.sourcePage })) };
+  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question) => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage })) };
 }
 
 async function renderPdf(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
@@ -226,13 +237,20 @@ function waitForImages(root: HTMLElement) {
 }
 
 async function renderDocx(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
+  const buffer = await file.arrayBuffer();
+  const sourceDocument = await extractDocxParagraphs(buffer);
+  if (sourceDocument.questions.length) {
+    const totalPages = sourceDocument.pageCount || 1;
+    if (totalPages > MAX_PAGES) throw new Error(`文件共有约 ${totalPages} 页，当前一次最多导入 ${MAX_PAGES} 页`);
+    onProgress(totalPages, totalPages);
+    return [{ pageNumber: 1, image: EMPTY_PAGE_IMAGE, sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }];
+  }
   const [{ renderAsync }, html2canvasModule] = await Promise.all([import("docx-preview"), import("html2canvas")]);
   const html2canvas = html2canvasModule.default;
   const host = document.createElement("div"); host.className = "file-import-render-host";
   Object.assign(host.style, { position: "fixed", left: "-12000px", top: "0", width: "900px", background: "white", zIndex: "-1" });
   document.body.appendChild(host);
   try {
-    const buffer = await file.arrayBuffer(); const sourceDocument = await extractDocxParagraphs(buffer); const sourceParagraphs = sourceDocument.paragraphs;
     await renderAsync(buffer, host, undefined, { className: "docx", inWrapper: true, breakPages: true, ignoreWidth: false, ignoreHeight: false, renderHeaders: true, renderFooters: true, useBase64URL: true });
     await waitForImages(host); await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const renderedPages = Array.from(host.querySelectorAll<HTMLElement>("section.docx"));
@@ -242,18 +260,19 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
       const canvas = await html2canvas(targets[index], { backgroundColor: "#ffffff", scale: 1.7, logging: false, useCORS: true });
       renderedCanvases.push({ canvas, target: targets[index] });
     }
-    let paragraphCursor = 0;
+    let answerSectionSeen = false;
     const pageSlices = renderedCanvases.flatMap(({ canvas, target }) => {
       const a4Height = Math.round(canvas.width * 297 / 210);
       const sliceCount = Math.ceil(canvas.height / a4Height); const hints = Array.from({ length: sliceCount }, () => [] as string[]); const answerFlags = Array.from({ length: sliceCount }, () => false);
       const targetRect = target.getBoundingClientRect(); const scale = canvas.width / Math.max(1, targetRect.width);
       const paragraphs = Array.from(target.querySelectorAll<HTMLElement>("article p"));
       for (const paragraph of paragraphs) {
-        const sourceIndex = paragraphCursor; const hint = sourceParagraphs[sourceIndex] ?? paragraph.textContent?.trim() ?? ""; paragraphCursor += 1;
+        const hint = paragraph.textContent?.trim() ?? "";
         if (!hint) continue;
         const top = Math.max(0, (paragraph.getBoundingClientRect().top - targetRect.top) * scale);
         const sliceIndex = Math.min(sliceCount - 1, Math.floor(top / a4Height)); hints[sliceIndex].push(hint);
-        if (sourceDocument.answerSectionStart >= 0 && sourceIndex >= sourceDocument.answerSectionStart) answerFlags[sliceIndex] = true;
+        if (/(?:参考答案与试题解析|答案与解析|试题解析)/.test(hint)) answerSectionSeen = true;
+        if (answerSectionSeen) answerFlags[sliceIndex] = true;
       }
       const slices: Array<{ canvas: HTMLCanvasElement; textHint: string; documentSection: "questions" | "answers" }> = [];
       for (let top = 0; top < canvas.height; top += a4Height) {
@@ -271,11 +290,6 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
     const pages: ImportPage[] = [];
     for (let index = 0; index < pageSlices.length; index += 1) {
       pages.push({ pageNumber: index + 1, image: canvasDataUrl(pageSlices[index].canvas), textHint: pageSlices[index].textHint, documentSection: pageSlices[index].documentSection, sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }); onProgress(index + 1, pageSlices.length);
-    }
-    for (const question of sourceDocument.questions) {
-      const firstLine = question.stemParagraphs[0];
-      const page = pages.find((item) => item.documentSection === "questions" && item.textHint?.split("\n").some((line) => line.includes(firstLine)));
-      if (page) question.sourcePage = page.pageNumber;
     }
     return pages;
   } finally { host.remove(); }

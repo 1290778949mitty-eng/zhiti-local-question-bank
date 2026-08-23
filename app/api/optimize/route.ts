@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     const model = process.env.OPENAI_TEXT_MODEL || process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash";
     const mode = process.env.OPENAI_API_MODE || "auto";
     let result = mode === "antigravity_gemini"
-      ? await callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", apiKey, model, prompt, images, schema)
+      ? await callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", apiKey, model, prompt, images, schema, reasoningEffort())
       : mode === "chat_completions" ? await callChatCompletions(base, apiKey, model, prompt, images) : await callResponses(base, apiKey, model, prompt, images);
     if ((!result.text || result.status >= 400) && mode === "auto") {
       const firstError = result.error;

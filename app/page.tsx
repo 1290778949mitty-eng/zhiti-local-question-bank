@@ -1,13 +1,17 @@
 "use client";
 
 import { ChangeEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { DocxContent, DocxOptions } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { exportQuestionsToWord } from "../lib/export-word";
-import { docxStemDisplayText, renderImportFile } from "../lib/file-import";
-import { clipboardImage, compressDataUrl, cropDataUrl, cropExactDataUrl, fileToDataUrl, imageAspectRatio, type NormalizedBox } from "../lib/image-tools";
-import { shouldAutoVectorizeDiagram } from "../lib/vector-diagram-reconstruction.mjs";
+import { renderImportFile } from "../lib/file-import";
+import { orderedImportTimestamp } from "../lib/question-order-rules.mjs";
+import { clipboardImage, compressDataUrl, cropExactDataUrl, fileToDataUrl, imageAspectRatio, materializeImageDataUrl, type NormalizedBox } from "../lib/image-tools";
+import { isPhotographedDiagram } from "../lib/image-processing-rules.mjs";
+import { extractRecognizedDiagram, shouldReconstructRecognizedDiagram } from "../lib/recognition-diagram";
+import type { BatchRecognitionResult, RecognitionQuestionResult } from "../lib/recognition-contract";
 import { renderVectorDiagramPlan, VectorDiagramFitError } from "../lib/vector-diagram-renderer";
-import { isGeometryQuestion, questionImages, resolveQuestionImageLayout } from "../lib/question-layout";
+import { isCompactConclusionQuestion, isGeometryQuestion, questionImages, resolveQuestionImageLayout } from "../lib/question-layout";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recognition-cleanup.mjs";
 import { authorizeDownload, createCloudCategory, createCloudQuestion, deleteCloudCategory, deleteCloudQuestion, fetchLibrary, fetchMe, importCloudLibrary, login, logout, register, updateCloudQuestion } from "../lib/api-client";
 import type { AuthUser, Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, Question, QuestionType, VectorDiagramPlan } from "../lib/types";
@@ -16,19 +20,10 @@ const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "�
 const difficulties: Difficulty[] = ["基础", "中等", "提高"];
 const emptyDraft = (): Question => ({ id: "", categoryId: "", type: "单选题", difficulty: "基础", stem: "", options: ["", "", "", ""], answer: "", analysis: "", source: "", createdAt: 0, updatedAt: 0 });
 
-type RecognitionResult = {
-  type: QuestionType; difficulty: Difficulty; stem: string; options: string[]; answer: string; analysis: string; source: string; tags: string[];
-  suggested_category_id: string | null; diagram_bbox: NormalizedBox | null; confidence: number; warnings: string[];
-  diagram_quality: DiagramQuality | null;
-};
-
 type OptimizationResult = {
   stem: string; options: string[]; answer: string; analysis: string; source: string; tags: string[];
   image_layout: ImageLayout; changes: string[];
 };
-type BatchQuestionResult = RecognitionResult & { question_number: string };
-type BatchAnswerResult = { question_number: string; answer: string; analysis: string };
-type BatchPageResult = { questions?: BatchQuestionResult[]; answers?: BatchAnswerResult[] };
 type FileImportDraft = Question & { importId: string; selected: boolean; documentNumber: string };
 type FileImportStep = "choose" | "rendering" | "recognizing" | "review";
 
@@ -39,6 +34,10 @@ const RETRYABLE_IMPORT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 function uid(prefix: string) { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
 function explicitChoiceFromAnalysis(value: string) {
   return value.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase() ?? "";
+}
+
+function importedDocxTableCount(question: Question) {
+  return [...(question.stemDocxXml ?? []), ...(question.optionsDocxXml ?? [])].filter((xml) => /<w:tbl\b/.test(xml)).length;
 }
 
 function isUsableImportedAnswer(value: string) {
@@ -77,6 +76,7 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()));
   return results;
 }
+
 export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -221,12 +221,13 @@ export default function Home() {
         const imported = structuredQuestions.map<FileImportDraft>((item, index) => ({
           id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.questionNumber,
           categoryId: fileImportCategory, type: item.type, difficulty: item.type === "解答题" ? "提高" : "中等",
-          stem: item.stem, stemParagraphs: item.stemParagraphs, stemDocxXml: item.stemDocxXml, stemDocxAssets: item.stemDocxAssets, options: sourcePage.sourceOptions?.[item.questionNumber] ?? [],
+          stem: item.stem, stemParagraphs: item.stemParagraphs, stemDocxXml: item.stemDocxXml, stemDocxAssets: item.stemDocxAssets,
+          options: item.options, optionsDocxXml: item.optionsDocxXml, optionsDocxAssets: item.optionsDocxAssets,
           answer: sourcePage.sourceAnswers?.[item.questionNumber] ?? (item.type === "解答题" ? "见解析" : ""),
           analysis: sourcePage.sourceAnalyses?.[item.questionNumber] ?? "", analysisDocxXml: sourcePage.sourceAnalysisXml?.[item.questionNumber], analysisDocxAssets: sourcePage.sourceAnalysisAssets?.[item.questionNumber],
           source: "", tags: [], contentImages: sourcePage.sourceQuestionImages?.[item.questionNumber] ?? [], recognitionConfidence: 1,
           recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取"], importFileName: file.name, sourcePage: item.sourcePage,
-          createdAt: timestamp - index, updatedAt: timestamp - index,
+          createdAt: orderedImportTimestamp(timestamp, index), updatedAt: orderedImportTimestamp(timestamp, index),
         }));
         setFileImportDrafts(imported); setFileImportStep("review"); return;
       }
@@ -236,12 +237,12 @@ export default function Home() {
       const recognizedPages = await mapWithConcurrency(pages, FILE_IMPORT_CONCURRENCY, async (page) => {
         let lastError = "本页识别失败";
         try {
-          if (page.documentSection === "answers" && page.sourceAnalyses) return { page, result: { questions: [], answers: [] } as BatchPageResult };
+          if (page.documentSection === "answers" && page.sourceAnalyses) return { page, result: { questions: [], answers: [] } as BatchRecognitionResult };
           for (let attempt = 1; attempt <= FILE_IMPORT_MAX_ATTEMPTS; attempt += 1) {
             if (controller.signal.aborted) throw new DOMException("文件录入已取消", "AbortError");
             try {
               const response = await fetch("/api/recognize-batch", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ image: page.image, textHint: page.textHint, pageNumber: page.pageNumber, fileName: file.name, categories: categoryPayload }) });
-              const payload = await response.json() as { result?: BatchPageResult; error?: string; code?: string };
+              const payload = await response.json() as { result?: BatchRecognitionResult; error?: string; code?: string };
               if (response.ok && payload.result) return { page, result: payload.result };
               lastError = payload.code === "MISSING_API_KEY" ? "尚未配置智能识别 API" : payload.error || `识别请求失败（${response.status}）`;
               if (!RETRYABLE_IMPORT_STATUSES.has(response.status) || attempt === FILE_IMPORT_MAX_ATTEMPTS) break;
@@ -266,18 +267,17 @@ export default function Home() {
         for (const item of recognized.result.questions ?? []) {
           const stemKey = item.stem.replace(/\s+/g, "").replace(/[，。；：,.!?！？]/g, "").slice(0, 100); const numberKey = `${item.type}:${item.question_number.trim()}`;
           if (!stemKey || seen.has(stemKey) || (item.question_number.trim() && seenNumbers.has(numberKey))) continue; seen.add(stemKey); if (item.question_number.trim()) seenNumbers.add(numberKey);
-          let diagramImage: string | undefined;
-          if (item.diagram_bbox && item.diagram_bbox.width > 20 && item.diagram_bbox.height > 20) { try { diagramImage = await cropDataUrl(recognized.page.image, item.diagram_bbox); } catch { item.warnings = [...item.warnings, "配图自动裁剪失败，请重新截图补充"]; } }
-          let reconstruction: Partial<Question> = { diagramImage, diagramSource: diagramImage ? "extracted" : undefined, diagramQuality: item.diagram_quality ?? undefined };
-          if (diagramImage && shouldAutoVectorizeDiagram(item.diagram_quality)) {
+          const extracted = await extractRecognizedDiagram(recognized.page.image, item); item.warnings = extracted.warnings;
+          let reconstruction: Partial<Question> = extracted.fields;
+          if (shouldReconstructRecognizedDiagram(extracted.diagramImage, item.diagram_quality)) {
             setFileImportProgress((current) => ({ ...current, label: `正在为第 ${item.question_number || imported.length + 1} 题高清重绘配图` }));
             try {
-              const rebuilt = await requestVectorDiagramReconstruction(item.stem, diagramImage, item.diagram_quality);
+              const rebuilt = await requestVectorDiagramReconstruction(item.stem, extracted.diagramImage!, item.diagram_quality);
               if (rebuilt.skipped) item.warnings = [...item.warnings, rebuilt.reason];
-              else reconstruction = { diagramOriginalImage: diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now() };
+              else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now() };
             } catch (error) { item.warnings = [...item.warnings, `高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`]; }
           }
-          const timestamp = importStartedAt - imported.length; const categoryId = item.suggested_category_id && categories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
+          const timestamp = orderedImportTimestamp(importStartedAt, imported.length); const categoryId = item.suggested_category_id && categories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
           const normalized = normalizeAnswerFields(item.answer, item.analysis);
           imported.push({ id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: item.tags, diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
         }
@@ -339,7 +339,13 @@ export default function Home() {
   }
 
   function updateImportDraft(importId: string, changes: Partial<FileImportDraft>) {
-    setFileImportDrafts((current) => current.map((item) => item.importId === importId ? { ...item, ...changes, ...(changes.stem === undefined ? {} : { stemDocxXml: undefined, stemDocxAssets: undefined }) } : item));
+    setFileImportDrafts((current) => current.map((item) => item.importId === importId ? {
+      ...item,
+      ...changes,
+      ...(changes.stem === undefined ? {} : { stemDocxXml: undefined, stemDocxAssets: undefined }),
+      ...(changes.options === undefined ? {} : { optionsDocxXml: undefined, optionsDocxAssets: undefined }),
+      ...(changes.analysis === undefined ? {} : { analysisDocxXml: undefined, analysisDocxAssets: undefined }),
+    } : item));
   }
 
   async function saveImportedQuestions() {
@@ -357,19 +363,20 @@ export default function Home() {
   }
 
   async function requestVectorDiagramReconstruction(stem: string, image: string, quality: DiagramQuality | undefined | null) {
-    const aspectRatio = await imageAspectRatio(image);
+    const uploadImage = await materializeImageDataUrl(image, 1600);
+    const aspectRatio = await imageAspectRatio(uploadImage);
     let previousPlan: VectorDiagramPlan | undefined; let fitFeedback: string[] | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const response = await fetch("/api/reconstruct-diagram", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image, stem, qualityIssues: quality?.issues ?? [], imageAspectRatio: aspectRatio, previousPlan, fitFeedback }),
+        body: JSON.stringify({ image: uploadImage, stem, qualityIssues: quality?.issues ?? [], imageAspectRatio: aspectRatio, previousPlan, fitFeedback }),
       });
       const payload = await response.json() as { result?: VectorDiagramPlan; skipped?: boolean; reason?: string; error?: string; code?: string };
       if (payload.skipped) return { skipped: true as const, reason: payload.reason || "这幅图不适合自动矢量重绘" };
       if (!response.ok || !payload.result) throw new Error(payload.code === "MISSING_API_KEY" ? "高清矢量重绘尚未配置" : payload.error || "没有生成可用的重绘方案");
       try {
-        const rendered = await renderVectorDiagramPlan(payload.result, image);
+        const rendered = await renderVectorDiagramPlan(payload.result, uploadImage, { allowSourceAnnotations: isPhotographedDiagram(quality) });
         return { skipped: false as const, plan: payload.result, ...rendered };
       } catch (error) {
         if (!(error instanceof VectorDiagramFitError) || attempt === 1) throw error;
@@ -383,24 +390,31 @@ export default function Home() {
     if (!questionDraft) return;
     setIsRecognizing(true); setRecognitionError("");
     try {
-      const response = await fetch("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image, categories: categories.map((item) => ({ id: item.id, path: pathOf(item.id) })) }) });
-      const payload = await response.json() as { result?: RecognitionResult; error?: string; code?: string };
+      const recognitionStartedAt = performance.now();
+      const uploadImage = await materializeImageDataUrl(image);
+      const response = await fetch("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: uploadImage, categories: categories.map((item) => ({ id: item.id, path: pathOf(item.id) })) }) });
+      const payload = await response.json() as { result?: RecognitionQuestionResult; error?: string; code?: string };
       if (!response.ok || !payload.result) throw new Error(payload.code === "MISSING_API_KEY" ? "智能识别尚未配置。请关闭后通过“启动 Mitty 的宝藏题库”重新打开，并按提示填写 Sub2API 地址、Key 和视觉模型。" : payload.error || "识别失败，请重试");
       const result = payload.result;
-      let diagramImage: string | undefined;
-      if (result.diagram_bbox && result.diagram_bbox.width > 30 && result.diagram_bbox.height > 30) diagramImage = await cropDataUrl(image, result.diagram_bbox);
-      let reconstruction: Partial<Question> = { diagramImage, diagramSource: diagramImage ? "extracted" : undefined, diagramQuality: result.diagram_quality ?? undefined };
-      const warnings = [...result.warnings];
-      if (diagramImage && enableVectorReconstruction && shouldAutoVectorizeDiagram(result.diagram_quality)) {
+      const extracted = await extractRecognizedDiagram(image, result);
+      let reconstruction: Partial<Question> = extracted.fields;
+      const warnings = extracted.warnings;
+      const recognitionDurationMs = Math.round(performance.now() - recognitionStartedAt);
+      const baseDraft: Partial<Question> = { type: result.type, difficulty: result.difficulty, stem: result.stem, options: result.options.length ? result.options : [], answer: cleanRecognizedAnswer(result.answer), analysis: cleanRecognizedAnalysis(result.analysis), source: result.source, tags: result.tags, categoryId: result.suggested_category_id && categories.some((item) => item.id === result.suggested_category_id) ? result.suggested_category_id : questionDraft.categoryId, originalImage: image, diagramBox: result.diagram_bbox ?? undefined, recognitionConfidence: result.confidence, recognitionWarnings: warnings, recognitionDurationMs, ...reconstruction };
+      setQuestionDraft((current) => current ? { ...current, ...baseDraft } : current);
+      setIsRecognizing(false);
+      if (shouldReconstructRecognizedDiagram(extracted.diagramImage, result.diagram_quality, enableVectorReconstruction)) {
         setIsReconstructingDiagram(true);
+        setNotice(`文字识别已完成（${(recognitionDurationMs / 1000).toFixed(1)} 秒），正在后台高清重绘配图`);
+        const reconstructionStartedAt = performance.now();
         try {
-          const rebuilt = await requestVectorDiagramReconstruction(result.stem, diagramImage, result.diagram_quality);
+          const rebuilt = await requestVectorDiagramReconstruction(result.stem, extracted.diagramImage!, result.diagram_quality);
           if (rebuilt.skipped) warnings.push(rebuilt.reason);
-          else reconstruction = { diagramOriginalImage: diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now() };
+          else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now(), diagramReconstructionDurationMs: Math.round(performance.now() - reconstructionStartedAt) };
         } catch (error) { warnings.push(`高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`); }
         finally { setIsReconstructingDiagram(false); }
+        setQuestionDraft((current) => current?.originalImage === image ? { ...current, ...reconstruction, recognitionWarnings: warnings } : current);
       }
-      setQuestionDraft((current) => current ? { ...current, type: result.type, difficulty: result.difficulty, stem: result.stem, options: result.options.length ? result.options : [], answer: cleanRecognizedAnswer(result.answer), analysis: cleanRecognizedAnalysis(result.analysis), source: result.source, tags: result.tags, categoryId: result.suggested_category_id && categories.some((item) => item.id === result.suggested_category_id) ? result.suggested_category_id : current.categoryId, originalImage: image, diagramBox: result.diagram_bbox ?? undefined, recognitionConfidence: result.confidence, recognitionWarnings: warnings, ...reconstruction } : current);
       setNotice(reconstruction.diagramSource === "svg-ai" ? "识别完成，低质量配图已完成高清矢量重绘" : "识别完成，请检查后保存");
     } catch (error) { setRecognitionError(error instanceof Error ? error.message : "识别失败，请重试"); }
     finally { setIsRecognizing(false); }
@@ -413,7 +427,7 @@ export default function Home() {
     setIsReconstructingDiagram(true); setRecognitionError("");
     try {
       if (questionDraft.vectorDiagramPlan?.strokes?.length) {
-        const rendered = await renderVectorDiagramPlan(questionDraft.vectorDiagramPlan, original);
+        const rendered = await renderVectorDiagramPlan(questionDraft.vectorDiagramPlan, original, { allowSourceAnnotations: isPhotographedDiagram(questionDraft.diagramQuality) });
         setQuestionDraft({ ...questionDraft, diagramOriginalImage: original, diagramImage: rendered.image, diagramSource: "svg-ai", vectorDiagramSvg: rendered.svg, diagramVisualFitScore: rendered.visualFitScore, diagramReconstructedAt: Date.now() });
         setNotice("高清矢量图已重新渲染");
         return;
@@ -429,7 +443,7 @@ export default function Home() {
   async function handleQuestionImage(file: File) {
     if (!file.type.startsWith("image/")) { setRecognitionError("请选择图片文件"); return; }
     if (file.size > 15 * 1024 * 1024) { setRecognitionError("图片超过 15MB，请先裁剪或压缩"); return; }
-    try { const image = await compressDataUrl(await fileToDataUrl(file)); setQuestionDraft((current) => current ? { ...current, originalImage: image, diagramImage: undefined, diagramOriginalImage: undefined, diagramSource: undefined, diagramQuality: undefined, diagramBox: undefined, geogebraBase64: undefined, geogebraPlan: undefined, vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined } : current); await recognizeImage(image); }
+    try { const image = await compressDataUrl(await fileToDataUrl(file), 3200); setQuestionDraft((current) => current ? { ...current, originalImage: image, diagramImage: undefined, diagramOriginalImage: undefined, diagramSource: undefined, diagramQuality: undefined, diagramBox: undefined, geogebraBase64: undefined, geogebraPlan: undefined, vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined } : current); await recognizeImage(image); }
     catch { setRecognitionError("无法读取这张图片，请换一张重试"); }
   }
 
@@ -483,6 +497,12 @@ export default function Home() {
       tags: optimizationPreview.tags,
       imageLayout: questionImages(questionDraft).length ? optimizationPreview.image_layout : "below",
       optimizedAt: Date.now(),
+      stemDocxXml: undefined,
+      stemDocxAssets: undefined,
+      optionsDocxXml: undefined,
+      optionsDocxAssets: undefined,
+      analysisDocxXml: undefined,
+      analysisDocxAssets: undefined,
     });
     setOptimizationPreview(null); setNotice("已采用 AI 优化结果");
   }
@@ -606,21 +626,21 @@ export default function Home() {
           <div className="question-list">
             {!filteredQuestions.length && <div className="empty-state"><div>空</div><h3>{showSelected ? "还没有勾选试题" : "这里还没有试题"}</h3><p>{showSelected ? "回到题库勾选需要组卷的题目" : authUser ? "新建一道试题，开始完善共享题库" : "登录后可以录入第一道试题"}</p><button onClick={showSelected ? () => setShowSelected(false) : openNewQuestion}>{showSelected ? "返回题库" : authUser ? "新建试题" : "登录"}</button></div>}
             {filteredQuestions.map((question, index) => {
-              const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question);
-              const displayStem = question.stemDocxXml?.length ? docxStemDisplayText(question.stemDocxXml) : question.stem;
+              const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question);
               return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
                 {authUser && <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
                 <div className="question-main">
                   <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span>{question.diagramSource === "svg-ai" ? <span className="geogebra-badge">高清矢量重绘</span> : question.diagramSource === "geogebra-ai" ? <span className="geogebra-badge">旧版 GeoGebra 重绘</span> : question.originalImage ? <span className="image-badge">图像识别</span> : images.length ? <span className="image-badge">题目配图</span> : null}{question.optimizedAt && <span className="optimized-badge">AI 已优化</span>}<em>{pathOf(question.categoryId)}</em></div>
-                  <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}` : ""}`}>
+                  <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}${compactConclusion ? " compact-conclusion" : ""}` : ""}`}>
                     <div className="question-copy">
-                      <p className="stem"><b>{index + 1}.</b> {question.source && <span className="question-source">（{question.source}）</span>}<MathText text={displayStem} /></p>
-                      {!!question.options.length && <div className="options">{question.options.map((option, optionIndex) => <span key={`${question.id}-${optionIndex}`}>{String.fromCharCode(65 + optionIndex)}. <MathText text={option} /></span>)}</div>}
+                      <div className="stem"><b className="question-number">{index + 1}.</b><div className="stem-body">{question.source && <span className="question-source">（{question.source}）</span>}<DocxContent xml={question.stemDocxXml} fallback={question.stem} stripLeadingQuestionNumber /></div></div>
+                      {!!question.options.length && !compactConclusion && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
                     </div>
                     {!!images.length && <div className={`question-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((image, imageIndex) => <img className="question-diagram" src={image} alt={`题目配图 ${imageIndex + 1}`} key={`${question.id}-image-${imageIndex}`} />)}</div>}
+                    {!!question.options.length && compactConclusion && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
                   </div>
                   {!!question.tags?.length && <div className="tag-row">{question.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-                  {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><p><MathText text={question.analysis} /></p></>}</div>}
+                  {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><div className="analysis-content"><DocxContent xml={question.analysisDocxXml} fallback={question.analysis} /></div></>}</div>}
                   <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? "收起解析" : "查看解析"}</button>{question.createdByEmail && <small>由 {question.createdByEmail} 录入</small>}<span></span>{authUser && <button onClick={() => duplicateQuestion(question)}>复制到我的题库</button>}{question.canEdit && <><button onClick={() => openEditQuestion(question)}>编辑</button><button className="danger-text" onClick={() => deleteQuestion(question)}>删除</button></>}</div>
                 </div>
               </article>;
@@ -643,7 +663,7 @@ export default function Home() {
           </div>)}
           <input ref={questionImageRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleQuestionImage(file); event.target.value = ""; }} />
           <input ref={manualImagesRef} hidden multiple type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { handleManualImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-          {entryMode === "screenshot" && <label className="geogebra-toggle"><input type="checkbox" checked={enableVectorReconstruction} disabled={isRecognizing || isReconstructingDiagram} onChange={(event) => setEnableVectorReconstruction(event.target.checked)} /><span><b>低质量配图时，自动高清矢量重绘</b><small>直接复刻原图点线、标签、线宽与留白；GeoGebra 仅用于后台核对数学关系，原始配图始终保留。</small></span><em>{enableVectorReconstruction ? "已开启" : "已关闭"}</em></label>}
+          {entryMode === "screenshot" && <label className="geogebra-toggle"><input type="checkbox" checked={enableVectorReconstruction} disabled={isRecognizing || isReconstructingDiagram} onChange={(event) => setEnableVectorReconstruction(event.target.checked)} /><span><b>低质量配图时，自动高清矢量重绘</b><small>复原原题印刷点线与标签，自动排除学生手写计算、圈画和后加辅助线；原始配图始终保留。</small></span><em>{enableVectorReconstruction ? "已开启" : "已关闭"}</em></label>}
           {entryMode === "screenshot" && recognitionError && <div className="recognition-error"><b>暂时无法自动识别</b><span>{recognitionError}</span></div>}
           {entryMode === "screenshot" && !!questionDraft.recognitionWarnings?.length && <div className="recognition-warning"><b>请重点核对</b><span>{questionDraft.recognitionWarnings.join("；")}</span></div>}
           <div className="review-divider"><span>{entryMode === "manual" ? "录入题目内容" : "识别结果 · 保存前请检查"}</span></div>
@@ -656,10 +676,10 @@ export default function Home() {
           </div>}
           {entryMode === "screenshot" && questionDraft.diagramImage && (questionDraft.diagramSource === "svg-ai" && questionDraft.diagramOriginalImage ? <div className="diagram-review geogebra-review"><div><span className="eyebrow">原图坐标高清矢量重绘</span><p>最终图直接使用原图坐标，不再由几何引擎重新摆点。综合视觉匹配度 {Math.round((questionDraft.diagramVisualFitScore ?? 0) * 100)}%，关系识别可信度 {Math.round((questionDraft.diagramReconstructionConfidence ?? 0) * 100)}%。</p></div><div className="diagram-compare"><figure><img src={questionDraft.diagramOriginalImage} alt="重绘前的原始配图" /><figcaption>原始配图</figcaption></figure><figure><img src={questionDraft.diagramImage} alt="高清矢量重绘配图" /><figcaption>高清矢量重绘</figcaption></figure></div><div className="diagram-actions"><button className="secondary" disabled={isReconstructingDiagram} onClick={reconstructCurrentDiagram}>{isReconstructingDiagram ? "正在重绘…" : "重新渲染"}</button><button className="text-button" onClick={() => setQuestionDraft({ ...questionDraft, diagramImage: questionDraft.diagramOriginalImage, diagramOriginalImage: undefined, diagramSource: "extracted", vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined })}>使用原图</button></div></div> : <div className="diagram-review"><div><span className="eyebrow">清理后的独立配图</span><p>{isReconstructingDiagram ? "正在提取原图轮廓、标签位置和视觉比例…" : "已自动从截图中分离，保存后只展示这张图。"}</p></div><img src={questionDraft.diagramImage} alt="识别出的题目配图" /><div className="diagram-actions"><button className="secondary" onClick={beginManualCrop}>手动框选</button>{questionDraft.diagramQuality?.reconstructable && <button className="secondary" disabled={isReconstructingDiagram} onClick={reconstructCurrentDiagram}>高清矢量重绘</button>}<button className="text-button" onClick={() => setQuestionDraft({ ...questionDraft, diagramImage: undefined, diagramBox: undefined, diagramOriginalImage: undefined, diagramSource: undefined, vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined })}>移除</button></div></div>)}
           {!!questionImages(questionDraft).length && <div className="layout-choice"><div><span className="eyebrow">图文排列</span><p>{questionDraft.stemDocxXml?.length ? "文件录入题会按篇幅、分问和配图数量自动选择合适结构。" : isGeometryQuestion(questionDraft) ? "网页端题干左、配图右；导出 Word 时自动改为题干下、配图右。" : "网页端可左右展示以节省空间，Word 导出会使用更稳妥的上下结构。"}</p></div><div>{questionDraft.stemDocxXml?.length ? <button className="active">{resolveQuestionImageLayout(questionDraft) === "right" ? "网页 · 题干左配图右" : resolveQuestionImageLayout(questionDraft) === "below-right" ? "网页 · 题干上配图右下" : "网页 · 题干上配图左下"}</button> : isGeometryQuestion(questionDraft) ? <button className="active">网页 · 题干左配图右</button> : <><button className={(questionDraft.imageLayout ?? "right") === "right" ? "active" : ""} onClick={() => setQuestionDraft({ ...questionDraft, imageLayout: "right" })}>题干左 · 配图右</button><button className={questionDraft.imageLayout === "below" ? "active" : ""} onClick={() => setQuestionDraft({ ...questionDraft, imageLayout: "below" })}>题干上 · 配图下</button></>}</div></div>}
-          {["单选题", "多选题"].includes(questionDraft.type) && <div className="field"><span>选项</span><div className="option-inputs">{questionDraft.options.map((option, index) => <label key={index}><b>{String.fromCharCode(65 + index)}</b><input value={option} onChange={(event) => { const options = [...questionDraft.options]; options[index] = event.target.value; setQuestionDraft({ ...questionDraft, options }); }} placeholder={`选项 ${String.fromCharCode(65 + index)}`} /></label>)}</div></div>}
+          {["单选题", "多选题"].includes(questionDraft.type) && <div className="field"><span>选项</span><div className="option-inputs">{questionDraft.options.map((option, index) => <label key={index}><b>{String.fromCharCode(65 + index)}</b><input value={option} onChange={(event) => { const options = [...questionDraft.options]; options[index] = event.target.value; setQuestionDraft({ ...questionDraft, options, optionsDocxXml: undefined, optionsDocxAssets: undefined }); }} placeholder={`选项 ${String.fromCharCode(65 + index)}`} /></label>)}</div></div>}
           <div className="form-grid two"><label>答案<input value={questionDraft.answer} onChange={(event) => setQuestionDraft({ ...questionDraft, answer: event.target.value })} placeholder="如：B 或 √5" /></label><label>来源（选填）<input value={questionDraft.source} onChange={(event) => setQuestionDraft({ ...questionDraft, source: event.target.value })} placeholder="如：2024·武汉模拟" /></label></div>
           <label className="field">知识点标签（用逗号分隔）<input value={(questionDraft.tags ?? []).join("，")} onChange={(event) => setQuestionDraft({ ...questionDraft, tags: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean) })} placeholder="如：手拉手模型，旋转型全等" /></label>
-          <label className="field">解析（选填）<textarea rows={3} value={questionDraft.analysis} onChange={(event) => setQuestionDraft({ ...questionDraft, analysis: event.target.value })} placeholder="截图中有解析时会自动识别，也可以手工补充…" /></label>
+          <label className="field">解析（选填）<textarea rows={3} value={questionDraft.analysis} onChange={(event) => setQuestionDraft({ ...questionDraft, analysis: event.target.value, analysisDocxXml: undefined, analysisDocxAssets: undefined })} placeholder="截图中有解析时会自动识别，也可以手工补充…" /></label>
           {optimizationError && <div className="recognition-error"><b>AI 优化未完成</b><span>{optimizationError}</span></div>}
           {optimizationPreview && <section className="optimization-preview">
             <div className="optimization-title"><div><span className="eyebrow">AI 优化预览</span><h3>确认无误后再采用</h3></div><span className="layout-recommendation">网页建议：{optimizationPreview.image_layout === "right" ? "题干左 · 配图右" : optimizationPreview.image_layout === "below-right" ? "题干上 · 配图右下" : "题干上 · 配图左下"}</span></div>
@@ -676,7 +696,7 @@ export default function Home() {
         {fileImportStep === "choose" && <>
           <div className="file-import-intro"><span>01</span><div><b>整份文件逐页识别</b><p>自动拆分题目、选项、答案和配图，识别后统一校对再保存。</p></div></div>
           <label className="field">默认存入分类<select value={fileImportCategory} onChange={(event) => setFileImportCategory(event.target.value)}><option value="">请选择分类</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
-          <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择或拖入文件</strong><span>支持 PDF、Word（.docx），最多 40 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
+          <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择或拖入文件</strong><span>支持 PDF、Word（.docx），最多 80 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
           <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
           {!!fileImportErrors.length && <div className="recognition-error"><b>文件未能读取</b><span>{fileImportErrors.join("；")}</span></div>}
           <div className="file-privacy-note">文件只在当前页面转换；正式题库仅保存你确认过的题目内容。</div>
@@ -686,10 +706,11 @@ export default function Home() {
           <div className="file-review-summary"><div><strong>{fileImportDrafts.length}</strong><span>道待校对题目</span></div><p>{fileImportName} · 已选择 {fileImportDrafts.filter((item) => item.selected).length} 道</p><button className="secondary" onClick={() => setFileImportDrafts((current) => current.map((item) => ({ ...item, selected: !current.every((entry) => entry.selected) })))}>{fileImportDrafts.every((item) => item.selected) ? "取消全选" : "全部选择"}</button></div>
           {!!fileImportErrors.length && <div className="recognition-warning"><b>部分页面需留意</b><span>{fileImportErrors.join("；")}</span></div>}
           {!fileImportDrafts.length ? <div className="file-empty-result"><b>没有识别到完整题目</b><p>请确认文件页面清晰且包含题号，再重新选择文件。</p><button className="secondary" onClick={() => setFileImportStep("choose")}>重新选择</button></div> : <div className="file-draft-list">{fileImportDrafts.map((item, index) => <article className={`file-draft ${item.selected ? "selected" : ""}`} key={item.importId}>
-            <div className="file-draft-head"><label><input type="checkbox" checked={item.selected} onChange={(event) => updateImportDraft(item.importId, { selected: event.target.checked })} /><b>第 {index + 1} 题</b></label><span>文件第 {item.sourcePage} 页 · 可信度 {Math.round((item.recognitionConfidence ?? 0) * 100)}%</span><button onClick={() => setFileImportDrafts((current) => current.filter((entry) => entry.importId !== item.importId))}>移除</button></div>
+            <div className="file-draft-head"><label><input type="checkbox" checked={item.selected} onChange={(event) => updateImportDraft(item.importId, { selected: event.target.checked })} /><b>第 {index + 1} 题</b></label><span>{item.sourcePage ? `文件第 ${item.sourcePage} 页` : `Word 原题 ${item.documentNumber || index + 1}`} · 可信度 {Math.round((item.recognitionConfidence ?? 0) * 100)}%</span><button onClick={() => setFileImportDrafts((current) => current.filter((entry) => entry.importId !== item.importId))}>移除</button></div>
             <div className="file-draft-fields"><label>题型<select value={item.type} onChange={(event) => updateImportDraft(item.importId, { type: event.target.value as QuestionType })}>{questionTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>难度<select value={item.difficulty} onChange={(event) => updateImportDraft(item.importId, { difficulty: event.target.value as Difficulty })}>{difficulties.map((difficulty) => <option key={difficulty}>{difficulty}</option>)}</select></label><label className="wide">分类<select value={item.categoryId} onChange={(event) => updateImportDraft(item.importId, { categoryId: event.target.value })}><option value="">请选择</option>{categories.map((category) => <option key={category.id} value={category.id}>{pathOf(category.id)}</option>)}</select></label></div>
             <label className="field">题干<textarea rows={3} value={item.stem} onChange={(event) => updateImportDraft(item.importId, { stem: event.target.value })} /></label>
-            {item.diagramImage && <div className={`file-draft-diagram ${item.diagramSource === "svg-ai" ? "reconstructed" : ""}`}><img src={item.diagramImage} alt={`第 ${index + 1} 题配图`} /><span>{item.diagramSource === "svg-ai" ? `高清矢量重绘 · 视觉匹配度 ${Math.round((item.diagramVisualFitScore ?? 0) * 100)}%` : "已自动分离配图"}</span></div>}
+            {!!questionImages(item).length && <div className="file-draft-media"><div className="file-draft-images">{questionImages(item).map((image, imageIndex) => <img src={image} alt={`第 ${index + 1} 题配图 ${imageIndex + 1}`} key={`${item.importId}-preview-${imageIndex}`} />)}</div><span>{item.diagramSource === "svg-ai" ? `高清矢量重绘 · 视觉匹配度 ${Math.round((item.diagramVisualFitScore ?? 0) * 100)}%` : `已保留 ${questionImages(item).length} 张原始配图`}</span></div>}
+            {!!importedDocxTableCount(item) && <div className="file-draft-structure">已保留 {importedDocxTableCount(item)} 个 Word 原表格，导出时沿用原行列与公式结构</div>}
             {item.type === "单选题" || item.type === "多选题" ? <label className="field">选项（每行一个）<textarea rows={Math.max(2, item.options.length)} value={item.options.join("\n")} onChange={(event) => updateImportDraft(item.importId, { options: event.target.value.split("\n") })} /></label> : null}
             <div className="file-draft-answer"><label>答案<input value={item.answer} onChange={(event) => updateImportDraft(item.importId, { answer: event.target.value })} /></label><label>来源<input value={item.source} onChange={(event) => updateImportDraft(item.importId, { source: event.target.value })} /></label></div>
             {!!item.recognitionWarnings?.length && <p className="file-draft-warning">请核对：{item.recognitionWarnings.join("；")}</p>}

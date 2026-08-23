@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { AuthUser, Category, LibraryData, Question } from "../../lib/types";
+import { retainedQuestionCreatedAt } from "../../lib/question-order-rules.mjs";
 
 type AppEnv = { DB: D1Database };
 
@@ -94,7 +95,7 @@ export async function prepareQuestion(raw: Question, user: AuthUser, existing?: 
     id: raw.id || crypto.randomUUID(),
     stem: String(raw.stem ?? "").trim().slice(0, 100_000),
     categoryId: String(raw.categoryId ?? ""),
-    createdAt: existing?.createdAt ?? now,
+    createdAt: existing?.createdAt ?? retainedQuestionCreatedAt(raw.createdAt, now),
     updatedAt: now,
     createdBy: existing?.createdBy ?? user.id,
   };
