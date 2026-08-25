@@ -40,8 +40,10 @@ test("server-renders the cloud question-bank guest shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
   assert.match(html, /全部试题/);
-  assert.match(html, /云端共享题库/);
-  assert.match(html, /登录后录题与下载/);
+  assert.match(html, /公共资源库/);
+  assert.match(html, /我的题库/);
+  assert.match(html, /题目属性/);
+  assert.match(html, /登录后可下载/);
   assert.doesNotMatch(html, /新建试题/);
   assert.doesNotMatch(html, /⇧ 文件录入/);
   assert.doesNotMatch(html, /<button[^>]*>生成 Word/);
@@ -58,8 +60,9 @@ test("keeps every privileged operation behind server-side authentication", async
   assert.match(auth, /HttpOnly; Secure; SameSite=Lax/);
   assert.match(auth, /PBKDF2/);
   assert.match(questionRoute, /await requireUser\(request\)/);
-  assert.match(questionRoute, /你只能修改自己录入的题目/);
+  assert.match(questionRoute, /updateScopedQuestion/);
   assert.match(downloadRoute, /await requireUser\(request\)/);
+  assert.match(downloadRoute, /authorizeQuestionDownload/);
 });
 
 test("keeps the select-all control on the right without filter scroll chrome", async () => {

@@ -2,8 +2,9 @@ import { AlignmentType, BorderStyle, Document, ImageRun, Math as WordMath, MathF
 import JSZip from "jszip";
 import { splitMathText } from "./math-text";
 import { needsWordMathEquation, normalizeMathNotation } from "./math-notation.mjs";
-import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout } from "./question-layout";
+import { isCompactConclusionQuestion, resolveQuestionImageLayout } from "./question-layout";
 import { resolveWordImageSource } from "./word-image-source.mjs";
+import { standaloneWordQuestionImages } from "./word-question-images.mjs";
 import { enlargeNestedWordMath, ensureWordMathSettings } from "./word-math-sizing.mjs";
 import type { Question } from "./types";
 
@@ -199,6 +200,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
       const compactConclusion = isCompactConclusionQuestion(question);
+      const images = standaloneWordQuestionImages(question);
       if (question.stemDocxXml?.length) {
         question.stemDocxXml.forEach((xml, rawIndex) => {
           const token = `__ZHITI_RAW_STEM_${rawParagraphs.length}__`;
@@ -207,20 +209,19 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
         });
       } else {
         const stem = new Paragraph({ spacing: { after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100, line: compactConclusion ? 300 : 360 }, children: [...textRuns(`${number}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText(stemParagraphs[0] ?? question.stem)] });
-        const images = questionImages(question);
         children.push(stem);
         for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: compactConclusion ? 0 : 40, line: compactConclusion ? 300 : 360 }, children: richText(continuation) }));
-        const imageLayout = resolveQuestionImageLayout(question);
-        if (images.length && compactConclusion) {
-          for (const image of images) children.push(await imageParagraph(image, 195, 155, 30, AlignmentType.LEFT, 20));
-        } else if (images.length && imageLayout === "right") {
-          children.push(await imageParagraph(images[0], 220, 165, 80, AlignmentType.RIGHT));
-          for (const image of images.slice(1)) children.push(await imageParagraph(image, 280, 195));
-        } else if (images.length && imageLayout === "below-right") {
-          for (const image of images) children.push(await imageParagraph(image, 300, 210, 140, AlignmentType.RIGHT));
-        } else {
-          for (const image of images) children.push(await imageParagraph(image, 300, 210));
-        }
+      }
+      const imageLayout = resolveQuestionImageLayout(question);
+      if (images.length && compactConclusion) {
+        for (const image of images) children.push(await imageParagraph(image, 195, 155, 30, AlignmentType.LEFT, 20));
+      } else if (images.length && imageLayout === "right") {
+        children.push(await imageParagraph(images[0], 220, 165, 80, AlignmentType.RIGHT));
+        for (const image of images.slice(1)) children.push(await imageParagraph(image, 280, 195));
+      } else if (images.length && imageLayout === "below-right") {
+        for (const image of images) children.push(await imageParagraph(image, 300, 210, 140, AlignmentType.RIGHT));
+      } else {
+        for (const image of images) children.push(await imageParagraph(image, 300, 210));
       }
       if (question.optionsDocxXml?.length) {
         question.optionsDocxXml.forEach((xml) => {

@@ -5,6 +5,7 @@ type AppEnv = {
   DB: D1Database;
   REGISTRATION_INVITE_CODE?: string;
   ADMIN_EMAIL?: string;
+  LOCAL_ADMIN_MODE?: string;
 };
 
 const COOKIE_NAME = "zhiti_session";
@@ -87,8 +88,14 @@ function cookieValue(request: Request, name: string) {
 }
 
 export function isLocalRequest(request: Request) {
-  const hostname = new URL(request.url).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost");
+  const localHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost");
+  const urlHostname = new URL(request.url).hostname.toLowerCase();
+  const forwardedHost = request.headers.get("X-Forwarded-Host")?.split(",", 1)[0].trim() ?? "";
+  const rawHost = (forwardedHost || request.headers.get("Host") || "").toLowerCase();
+  const requestHost = rawHost.startsWith("[") ? rawHost.slice(1, rawHost.indexOf("]")) : rawHost.split(":", 1)[0];
+  const connectingIp = request.headers.get("CF-Connecting-IP")?.trim().toLowerCase() ?? "";
+  const explicitlyLocal = appEnv().LOCAL_ADMIN_MODE === "true" && (connectingIp === "127.0.0.1" || connectingIp === "::1");
+  return explicitlyLocal || localHost(urlHostname) || localHost(requestHost);
 }
 
 async function ensureLocalAdmin() {

@@ -7,7 +7,7 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
-if [[ ! -f .env.local ]] || ! rg -q '^OPENAI_API_KEY=.+' .env.local; then
+if [[ ! -f .env.local ]] || ! /usr/bin/grep -Eq '^OPENAI_API_KEY=.+' .env.local; then
   setup_result=$(osascript <<'APPLESCRIPT'
 set baseResult to display dialog "请输入 API 基础地址。使用自建 Sub2API 时填写你的中转站地址并以 /v1 结尾；使用官方服务可保留默认值。" default answer "https://api.openai.com/v1" with title "知题智能识别 · 第 1 步" buttons {"暂不设置", "下一步"} default button "下一步"
 if button returned of baseResult is "暂不设置" then return "SKIP"

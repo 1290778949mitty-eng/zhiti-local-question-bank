@@ -1,32 +1,39 @@
-import type { Category, LibraryData, Question } from "./types";
+import type { Category, LibraryData, LibraryModule, Question } from "./types";
+import { EXAM_MODULES, EXAM_SEED_CATEGORIES } from "./exam-modules.mjs";
 
 const DB_NAME = "zhiti-local-library";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+const MODULES = "modules";
 const CATEGORIES = "categories";
 const QUESTIONS = "questions";
 
-const seedCategories: Category[] = [
-  { id: "math-7", name: "七年级数学", parentId: null, createdAt: 1 },
-  { id: "rational", name: "有理数", parentId: "math-7", createdAt: 2 },
-  { id: "number-line", name: "数轴", parentId: "rational", createdAt: 3 },
-  { id: "opposite", name: "相反数", parentId: "rational", createdAt: 4 },
-  { id: "absolute", name: "绝对值", parentId: "rational", createdAt: 5 },
-  { id: "algebra", name: "整式的加减", parentId: "math-7", createdAt: 6 },
-  { id: "equation", name: "一元一次方程", parentId: "math-7", createdAt: 7 },
-];
-
-const now = Date.now();
-const seedQuestions: Question[] = [
-  { id: "q1", categoryId: "number-line", type: "单选题", difficulty: "基础", stem: "在数轴上，表示数 −3 的点到原点的距离是（　　）", options: ["−3", "3", "±3", "0"], answer: "B", analysis: "数轴上的点到原点的距离等于这个数的绝对值，所以 |−3|＝3。", source: "示例题", createdAt: now - 3000, updatedAt: now - 3000 },
-  { id: "q2", categoryId: "opposite", type: "填空题", difficulty: "基础", stem: "−5 的相反数是______。", options: [], answer: "5", analysis: "只有符号不同的两个数互为相反数。", source: "示例题", createdAt: now - 2000, updatedAt: now - 2000 },
-  { id: "q3", categoryId: "rational", type: "解答题", difficulty: "提高", stem: "计算：−2³ + 4 ×（−3）−（−5）。", options: [], answer: "−15", analysis: "原式＝−8−12＋5＝−15。注意乘方运算优先。", source: "示例题", createdAt: now - 1000, updatedAt: now - 1000 },
-];
+const seedModules: LibraryModule[] = EXAM_MODULES.map((item, index) => ({
+  id: item.rootCategoryId,
+  name: item.name,
+  subtitle: item.subtitle,
+  sortOrder: index,
+  createdAt: index + 1,
+  updatedAt: index + 1,
+}));
+const seedCategories: Category[] = EXAM_SEED_CATEGORIES
+  .filter((item) => item.parentId !== null)
+  .map((item) => {
+    let current: Category | undefined = item;
+    let guard = 0;
+    while (current?.parentId && guard < 100) {
+      current = EXAM_SEED_CATEGORIES.find((candidate) => candidate.id === current?.parentId);
+      guard += 1;
+    }
+    return { ...item, moduleId: current?.id, parentId: item.parentId };
+  });
+const seedQuestions: Question[] = [];
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      if (!db.objectStoreNames.contains(MODULES)) db.createObjectStore(MODULES, { keyPath: "id" });
       if (!db.objectStoreNames.contains(CATEGORIES)) db.createObjectStore(CATEGORIES, { keyPath: "id" });
       if (!db.objectStoreNames.contains(QUESTIONS)) db.createObjectStore(QUESTIONS, { keyPath: "id" });
     };
@@ -53,23 +60,47 @@ function complete(transaction: IDBTransaction): Promise<void> {
 
 export async function loadLibrary(): Promise<LibraryData> {
   const db = await openDb();
+  let modules = await readAll<LibraryModule>(db, MODULES);
   let categories = await readAll<Category>(db, CATEGORIES);
   let questions = await readAll<Question>(db, QUESTIONS);
-  if (!categories.length && !questions.length) {
-    await replaceLibrary({ categories: seedCategories, questions: seedQuestions });
+  if (!modules.length && !categories.length && !questions.length) {
+    await replaceLibrary({ scope: "mine", modules: seedModules, categories: seedCategories, questions: seedQuestions });
+    modules = seedModules;
     categories = seedCategories;
     questions = seedQuestions;
+  } else if (!modules.length) {
+    const roots = categories.filter((item) => item.parentId === null);
+    modules = roots.map((item, index) => ({
+      id: item.id, name: item.name, subtitle: "", sortOrder: index,
+      createdAt: item.createdAt, updatedAt: item.createdAt,
+    }));
+    const byId = new Map(categories.map((item) => [item.id, item]));
+    categories = categories.filter((item) => item.parentId !== null).map((item) => {
+      let current: Category | undefined = item;
+      let guard = 0;
+      while (current?.parentId && guard < 100) { current = byId.get(current.parentId); guard += 1; }
+      return { ...item, moduleId: current?.id };
+    });
+    questions = questions.map((item) => {
+      let current = byId.get(item.categoryId);
+      let guard = 0;
+      while (current?.parentId && guard < 100) { current = byId.get(current.parentId); guard += 1; }
+      return { ...item, moduleId: current?.id };
+    });
+    await replaceLibrary({ scope: "mine", modules, categories, questions });
   }
   db.close();
-  return { categories, questions };
+  return { scope: "mine", modules, categories, questions };
 }
 
 export async function replaceLibrary(data: LibraryData): Promise<void> {
   const db = await openDb();
-  const tx = db.transaction([CATEGORIES, QUESTIONS], "readwrite");
+  const tx = db.transaction([MODULES, CATEGORIES, QUESTIONS], "readwrite");
+  const moduleStore = tx.objectStore(MODULES);
   const categoryStore = tx.objectStore(CATEGORIES);
   const questionStore = tx.objectStore(QUESTIONS);
-  categoryStore.clear(); questionStore.clear();
+  moduleStore.clear(); categoryStore.clear(); questionStore.clear();
+  data.modules.forEach((item) => moduleStore.put(item));
   data.categories.forEach((item) => categoryStore.put(item));
   data.questions.forEach((item) => questionStore.put(item));
   await complete(tx);

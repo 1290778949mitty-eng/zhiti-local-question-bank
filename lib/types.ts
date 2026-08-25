@@ -1,5 +1,7 @@
 export type QuestionType = "单选题" | "多选题" | "填空题" | "判断题" | "解答题";
 export type Difficulty = "基础" | "中等" | "提高";
+export type QuestionProvenance = "真题" | "风格题" | "来源待核实";
+export type LibraryScope = "public" | "mine";
 export type ImageLayout = "right" | "below" | "below-right";
 export type DiagramKind = "geometry" | "coordinate" | "function" | "unsupported";
 export type DiagramSource = "extracted" | "geogebra-ai" | "svg-ai" | "manual";
@@ -108,15 +110,28 @@ export type Category = {
   id: string;
   name: string;
   parentId: string | null;
+  moduleId?: string;
   createdAt: number;
   createdBy?: string | null;
 };
 
+export type LibraryModule = {
+  id: string;
+  name: string;
+  subtitle: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type Question = {
   id: string;
+  moduleId?: string;
   categoryId: string;
   type: QuestionType;
   difficulty: Difficulty;
+  provenance?: QuestionProvenance;
+  examYear?: string;
   stem: string;
   stemParagraphs?: string[];
   stemDocxXml?: string[];
@@ -160,7 +175,13 @@ export type Question = {
   canEdit?: boolean;
 };
 
-export type LibraryData = { categories: Category[]; questions: Question[] };
+export type LibraryData = {
+  scope: LibraryScope;
+  modules: LibraryModule[];
+  categories: Category[];
+  questions: Question[];
+  publishedAt?: number | null;
+};
 
 export type AuthUser = {
   id: string;

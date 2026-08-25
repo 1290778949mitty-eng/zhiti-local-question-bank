@@ -13,12 +13,13 @@ import type { BatchRecognitionResult, RecognitionQuestionResult } from "../lib/r
 import { renderVectorDiagramPlan, VectorDiagramFitError } from "../lib/vector-diagram-renderer";
 import { isCompactConclusionQuestion, isGeometryQuestion, questionImages, resolveQuestionImageLayout } from "../lib/question-layout";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recognition-cleanup.mjs";
-import { authorizeDownload, createCloudCategory, createCloudQuestion, deleteCloudCategory, deleteCloudQuestion, fetchLibrary, fetchMe, importCloudLibrary, login, logout, register, updateCloudQuestion } from "../lib/api-client";
-import type { AuthUser, Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, Question, QuestionType, VectorDiagramPlan } from "../lib/types";
+import { authorizeDownload, copyPublicQuestions, createCloudCategory, createCloudModule, createCloudQuestion, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, fetchLibrary, fetchMe, importCloudLibrary, login, logout, publishPublicLibrary, register, reorderCloudModules, updateCloudModule, updateCloudQuestion, type PublicationProgress } from "../lib/api-client";
+import { normalizeQuestionProvenance, QUESTION_PROVENANCES } from "../lib/exam-modules.mjs";
+import type { AuthUser, Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, LibraryModule, LibraryScope, Question, QuestionProvenance, QuestionType, VectorDiagramPlan } from "../lib/types";
 
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const difficulties: Difficulty[] = ["基础", "中等", "提高"];
-const emptyDraft = (): Question => ({ id: "", categoryId: "", type: "单选题", difficulty: "基础", stem: "", options: ["", "", "", ""], answer: "", analysis: "", source: "", createdAt: 0, updatedAt: 0 });
+const emptyDraft = (): Question => ({ id: "", categoryId: "", type: "单选题", difficulty: "基础", provenance: "来源待核实", examYear: "", stem: "", options: ["", "", "", ""], answer: "", analysis: "", source: "", createdAt: 0, updatedAt: 0 });
 
 type OptimizationResult = {
   stem: string; options: string[]; answer: string; analysis: string; source: string; tags: string[];
@@ -26,12 +27,15 @@ type OptimizationResult = {
 };
 type FileImportDraft = Question & { importId: string; selected: boolean; documentNumber: string };
 type FileImportStep = "choose" | "rendering" | "recognizing" | "review";
+type ColorTheme = "light" | "dark";
 
 const FILE_IMPORT_CONCURRENCY = 2;
 const FILE_IMPORT_MAX_ATTEMPTS = 2;
 const RETRYABLE_IMPORT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 function uid(prefix: string) { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
+function currentTimestamp() { return Date.now(); }
+function monotonicTime() { return performance.now(); }
 function explicitChoiceFromAnalysis(value: string) {
   return value.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase() ?? "";
 }
@@ -59,7 +63,7 @@ function explicitChoicesFromSourceText(value: string) {
 
 function normalizeAnswerFields(rawAnswer: string, rawAnalysis: string) {
   let answer = cleanRecognizedAnswer(rawAnswer); let analysis = cleanRecognizedAnalysis(rawAnalysis);
-  const combined = answer.match(/^([^。\n]{1,24})。\s*(.+)$/s);
+  const combined = answer.match(/^([^。\n]{1,24})。\s*([\s\S]+)$/);
   if (combined && !analysis) { answer = combined[1].trim(); analysis = combined[2].trim(); }
   if (!isUsableImportedAnswer(answer)) answer = explicitChoiceFromAnalysis(analysis);
   return { answer, analysis };
@@ -78,12 +82,17 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
 }
 
 export default function Home() {
+  const [colorTheme, setColorTheme] = useState<ColorTheme>("light");
+  const [libraryScope, setLibraryScope] = useState<LibraryScope>("public");
+  const [modules, setModules] = useState<LibraryModule[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [activeModuleId, setActiveModuleId] = useState("");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedByScope, setSelectedByScope] = useState<Record<LibraryScope, string[]>>({ public: [], mine: [] });
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"全部" | QuestionType>("全部");
+  const [provenanceFilter, setProvenanceFilter] = useState<"全部" | QuestionProvenance>("全部");
   const [showSelected, setShowSelected] = useState(false);
   const [expandedAnswers, setExpandedAnswers] = useState<string[]>([]);
   const [questionDraft, setQuestionDraft] = useState<Question | null>(null);
@@ -92,7 +101,7 @@ export default function Home() {
   const [categoryParent, setCategoryParent] = useState<string>("");
   const [exportDialog, setExportDialog] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
-  const [paperTitle, setPaperTitle] = useState("七年级数学专项练习");
+  const [paperTitle, setPaperTitle] = useState("专项练习");
   const [includeAnswers, setIncludeAnswers] = useState(true);
   const [notice, setNotice] = useState("");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -122,26 +131,71 @@ export default function Home() {
   const [fileImportProgress, setFileImportProgress] = useState({ current: 0, total: 0, label: "" });
   const [fileImportDrafts, setFileImportDrafts] = useState<FileImportDraft[]>([]);
   const [fileImportErrors, setFileImportErrors] = useState<string[]>([]);
+  const [moduleDialog, setModuleDialog] = useState<"new" | "manage" | null>(null);
+  const [moduleDraft, setModuleDraft] = useState<LibraryModule | null>(null);
+  const [moduleName, setModuleName] = useState("");
+  const [moduleSubtitle, setModuleSubtitle] = useState("");
+  const [draggedModuleId, setDraggedModuleId] = useState("");
+  const [deleteModuleTarget, setDeleteModuleTarget] = useState<LibraryModule | null>(null);
+  const [deleteModuleConfirmation, setDeleteModuleConfirmation] = useState("");
+  const [copyDialog, setCopyDialog] = useState(false);
+  const [copyTargetData, setCopyTargetData] = useState<LibraryData | null>(null);
+  const [copyTargetModule, setCopyTargetModule] = useState("");
+  const [copyTargetCategory, setCopyTargetCategory] = useState("");
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publicationProgress, setPublicationProgress] = useState<PublicationProgress | null>(null);
+  const [publicationFailed, setPublicationFailed] = useState(false);
+  const [publishedAt, setPublishedAt] = useState<number | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const questionImageRef = useRef<HTMLInputElement>(null);
   const manualImagesRef = useRef<HTMLInputElement>(null);
   const fileImportRef = useRef<HTMLInputElement>(null);
   const cropStageRef = useRef<HTMLDivElement>(null);
   const fileImportAbortRef = useRef<AbortController | null>(null);
+  const activeModule = modules.find((item) => item.id === activeModuleId) ?? modules[0] ?? null;
+  const selectedIds = selectedByScope[libraryScope];
+  const canManageLibrary = Boolean(authUser && (libraryScope === "mine" || authUser.local));
 
-  async function refreshLibrary(preserveCategory = true) {
-    const data = await fetchLibrary();
-    setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
-    setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
-    setActiveCategory((current) => preserveCategory && current && data.categories.some((item) => item.id === current) ? current : data.categories.find((item) => item.parentId === null)?.id ?? null);
+  function setSelectedIds(updater: string[] | ((current: string[]) => string[])) {
+    setSelectedByScope((current) => ({
+      ...current,
+      [libraryScope]: typeof updater === "function" ? updater(current[libraryScope]) : updater,
+    }));
   }
 
   useEffect(() => {
-    Promise.all([fetchMe(), fetchLibrary()]).then(([auth, data]) => {
+    const frame = window.requestAnimationFrame(() => setColorTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light"));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  function chooseColorTheme(theme: ColorTheme) {
+    setColorTheme(theme);
+    document.documentElement.dataset.theme = theme;
+    try { window.localStorage.setItem("mitty-color-theme", theme); } catch { /* 浏览器禁用本地存储时仍保留本次切换 */ }
+  }
+
+  function applyLibrary(data: LibraryData, preserveCategory = true) {
+    const sortedModules = [...data.modules].sort((left, right) => left.sortOrder - right.sortOrder);
+    setModules(sortedModules);
+    setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
+    setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
+    setPublishedAt(data.publishedAt ?? null);
+    const availableIds = new Set([...sortedModules.map((item) => item.id), ...data.categories.map((item) => item.id)]);
+    const nextModule = sortedModules.find((item) => item.id === activeModuleId) ?? sortedModules[0] ?? null;
+    setActiveModuleId(nextModule?.id ?? "");
+    setActiveCategory((current) => preserveCategory && current && availableIds.has(current) ? current : nextModule?.id ?? null);
+    if (nextModule) setPaperTitle(`${nextModule.name}专项练习`);
+  }
+
+  async function refreshLibrary(preserveCategory = true, scope = libraryScope) {
+    const data = await fetchLibrary(scope);
+    applyLibrary(data, preserveCategory);
+  }
+
+  useEffect(() => {
+    Promise.all([fetchMe(), fetchLibrary("public")]).then(([auth, data]) => {
       setAuthUser(auth.user);
-      setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
-      setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
-      setActiveCategory(data.categories.find((item) => item.parentId === null)?.id ?? null);
+      applyLibrary(data, false);
     }).catch(() => setNotice("云端题库读取失败，请刷新页面重试")).finally(() => setAuthLoading(false));
   }, []);
 
@@ -153,57 +207,91 @@ export default function Home() {
     return [id, ...direct.flatMap((item) => descendantsOf(item.id))];
   };
   const categoryById = (id: string | null) => categories.find((item) => item.id === id);
+  const moduleById = (id: string | null) => modules.find((item) => item.id === id);
   const pathOf = (id: string) => {
+    const directModule = moduleById(id); if (directModule) return directModule.name;
     const names: string[] = []; let current = categoryById(id); let guard = 0;
-    while (current && guard < 20) { names.unshift(current.name); current = categoryById(current.parentId); guard += 1; }
+    while (current && guard < 20) {
+      names.unshift(current.name);
+      const parentModule = moduleById(current.parentId);
+      if (parentModule) { names.unshift(parentModule.name); break; }
+      current = categoryById(current.parentId); guard += 1;
+    }
     return names.join(" / ");
   };
-  const countFor = (id: string) => { const ids = descendantsOf(id); return questions.filter((q) => ids.includes(q.categoryId)).length; };
+  const countFor = (id: string) => moduleById(id)
+    ? questions.filter((question) => question.moduleId === id).length
+    : questions.filter((question) => descendantsOf(id).includes(question.categoryId)).length;
+  const moduleCategories = activeModule ? categories.filter((item) => item.moduleId === activeModule.id) : [];
+  const moduleQuestions = activeModule ? questions.filter((item) => item.moduleId === activeModule.id) : [];
+  const activeCategoryIds = activeCategory ? descendantsOf(activeCategory) : activeModule ? [activeModule.id, ...moduleCategories.map((item) => item.id)] : [];
+  const categoryQuestions = moduleQuestions.filter((item) => activeCategoryIds.includes(item.categoryId));
+
+  function switchExamModule(moduleId: string) {
+    const targetModule = modules.find((item) => item.id === moduleId); if (!targetModule) return;
+    setActiveModuleId(targetModule.id);
+    setActiveCategory(targetModule.id);
+    setPaperTitle(`${targetModule.name}专项练习`);
+    setProvenanceFilter("全部");
+    setTypeFilter("全部");
+    setQuery("");
+    setShowSelected(false);
+  }
 
   const filteredQuestions = useMemo(() => {
     let result = questions;
-    if (activeCategory) { const allowed = descendantsOf(activeCategory); result = result.filter((item) => allowed.includes(item.categoryId)); }
     if (showSelected) result = result.filter((item) => selectedIds.includes(item.id));
+    else if (activeCategory) { const allowed = descendantsOf(activeCategory); result = result.filter((item) => allowed.includes(item.categoryId)); }
+    if (provenanceFilter !== "全部") result = result.filter((item) => normalizeQuestionProvenance(item.provenance) === provenanceFilter);
     if (typeFilter !== "全部") result = result.filter((item) => item.type === typeFilter);
     const keyword = query.trim().toLowerCase();
-    if (keyword) result = result.filter((item) => `${item.stem} ${item.answer} ${item.analysis} ${item.source} ${(item.tags ?? []).join(" ")} ${pathOf(item.categoryId)}`.toLowerCase().includes(keyword));
+    if (keyword) result = result.filter((item) => `${item.stem} ${item.answer} ${item.analysis} ${item.source} ${item.examYear ?? ""} ${normalizeQuestionProvenance(item.provenance)} ${(item.tags ?? []).join(" ")} ${pathOf(item.categoryId)}`.toLowerCase().includes(keyword));
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, categories, activeCategory, showSelected, typeFilter, query, selectedIds]);
+  }, [questions, categories, activeCategory, showSelected, provenanceFilter, typeFilter, query, selectedIds]);
 
   const selectedQuestions = selectedIds.map((id) => questions.find((item) => item.id === id)).filter(Boolean) as Question[];
   const allFilteredSelected = filteredQuestions.length > 0 && filteredQuestions.every((item) => selectedIds.includes(item.id));
-  const activeName = showSelected ? "我的组卷" : activeCategory ? categoryById(activeCategory)?.name ?? "全部试题" : "全部试题";
+  const activeName = showSelected ? "我的组卷" : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? "全部试题" : "全部试题";
 
   const requireLogin = () => { if (authUser) return true; setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
+  async function switchLibraryScope(scope: LibraryScope) {
+    if (scope === libraryScope) { setShowSelected(false); return; }
+    if (scope === "mine" && !requireLogin()) return;
+    try {
+      const data = await fetchLibrary(scope);
+      setLibraryScope(scope); setShowSelected(false); setQuery(""); setTypeFilter("全部"); setProvenanceFilter("全部");
+      applyLibrary(data, false);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "题库切换失败"); }
+  }
   const toggleSelected = (id: string) => { if (!requireLogin()) return; setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); };
   const toggleAllFiltered = () => {
     if (!requireLogin()) return;
     const visibleIds = filteredQuestions.map((item) => item.id);
     setSelectedIds((current) => allFilteredSelected ? current.filter((id) => !visibleIds.includes(id)) : [...current, ...visibleIds.filter((id) => !current.includes(id))]);
   };
-  const openNewQuestion = () => { if (!requireLogin()) return; setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode("manual"); setQuestionDraft({ ...emptyDraft(), categoryId: activeCategory ?? categories[0]?.id ?? "", imageLayout: "right", contentImages: [] }); };
-  const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { setNotice("你只能修改自己录入的题目"); return; } setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode(question.originalImage ? "screenshot" : "manual"); setQuestionDraft({ ...question, options: [...question.options], contentImages: [...(question.contentImages ?? [])] }); };
+  const openNewQuestion = () => { if (!requireLogin() || !canManageLibrary) return; if (!activeModule) { setModuleDialog("new"); return; } setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode("manual"); setQuestionDraft({ ...emptyDraft(), moduleId: activeModule.id, categoryId: activeCategory ?? activeModule.id, imageLayout: "right", contentImages: [] }); };
+  const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { setNotice("当前题库为只读"); return; } const questionModule = modules.find((item) => item.id === question.moduleId); if (questionModule && questionModule.id !== activeModuleId) { setActiveModuleId(questionModule.id); setPaperTitle(`${questionModule.name}专项练习`); setActiveCategory(question.categoryId); } setRecognitionError(""); setOptimizationError(""); setOptimizationPreview(null); setEntryMode(question.originalImage ? "screenshot" : "manual"); setQuestionDraft({ ...question, options: [...question.options], contentImages: [...(question.contentImages ?? [])] }); };
 
   async function submitAuth() {
     setAuthSubmitting(true); setAuthError("");
     try {
       const result = authMode === "register" ? await register(authEmail, authPassword, authInvite) : await login(authEmail, authPassword);
-      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite(""); await refreshLibrary();
+      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite(""); await refreshLibrary(true, libraryScope);
       setNotice(authMode === "register" ? "注册成功，已登录云端题库" : "登录成功");
     } catch (error) { setAuthError(error instanceof Error ? error.message : "操作失败，请重试"); }
     finally { setAuthSubmitting(false); }
   }
 
   async function signOut() {
-    try { await logout(); setAuthUser(null); setSelectedIds([]); setShowSelected(false); await refreshLibrary(); setNotice("已退出登录，当前为访客浏览"); }
+    try { await logout(); setAuthUser(null); setSelectedByScope({ public: [], mine: [] }); setShowSelected(false); setLibraryScope("public"); await refreshLibrary(false, "public"); setNotice("已退出登录，当前为访客浏览"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "退出失败"); }
   }
 
   function openFileImport() {
-    if (!requireLogin()) return;
+    if (!requireLogin() || !canManageLibrary || !activeModule) return;
     setQuestionDraft(null); setFileImportOpen(true); setFileImportStep("choose"); setFileImportName(""); setFileImportDrafts([]); setFileImportErrors([]);
-    setFileImportCategory(activeCategory ?? categories[0]?.id ?? ""); setFileImportProgress({ current: 0, total: 0, label: "" });
+    setFileImportCategory(activeCategory ?? activeModule.id); setFileImportProgress({ current: 0, total: 0, label: "" });
   }
 
   function closeFileImport() { fileImportAbortRef.current?.abort(); fileImportAbortRef.current = null; setFileImportOpen(false); }
@@ -217,7 +305,7 @@ export default function Home() {
       const structuredQuestions = pages.find((page) => page.sourceQuestions?.length)?.sourceQuestions;
       if (structuredQuestions?.length) {
         setFileImportStep("recognizing"); setFileImportProgress({ current: structuredQuestions.length, total: structuredQuestions.length, label: `已按 Word 原始结构整理 ${structuredQuestions.length} 道题` });
-        const sourcePage = pages.find((page) => page.sourceQuestions?.length) ?? pages[0]; const timestamp = Date.now();
+        const sourcePage = pages.find((page) => page.sourceQuestions?.length) ?? pages[0]; const timestamp = currentTimestamp();
         const imported = structuredQuestions.map<FileImportDraft>((item, index) => ({
           id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.questionNumber,
           categoryId: fileImportCategory, type: item.type, difficulty: item.type === "解答题" ? "提高" : "中等",
@@ -225,7 +313,7 @@ export default function Home() {
           options: item.options, optionsDocxXml: item.optionsDocxXml, optionsDocxAssets: item.optionsDocxAssets,
           answer: sourcePage.sourceAnswers?.[item.questionNumber] ?? (item.type === "解答题" ? "见解析" : ""),
           analysis: sourcePage.sourceAnalyses?.[item.questionNumber] ?? "", analysisDocxXml: sourcePage.sourceAnalysisXml?.[item.questionNumber], analysisDocxAssets: sourcePage.sourceAnalysisAssets?.[item.questionNumber],
-          source: "", tags: [], contentImages: sourcePage.sourceQuestionImages?.[item.questionNumber] ?? [], recognitionConfidence: 1,
+          provenance: "来源待核实", examYear: "", source: "", tags: [], contentImages: sourcePage.sourceQuestionImages?.[item.questionNumber] ?? [], recognitionConfidence: 1,
           recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取"], importFileName: file.name, sourcePage: item.sourcePage,
           createdAt: orderedImportTimestamp(timestamp, index), updatedAt: orderedImportTimestamp(timestamp, index),
         }));
@@ -233,7 +321,7 @@ export default function Home() {
       }
       setFileImportStep("recognizing"); setFileImportProgress({ current: 0, total: pages.length, label: `准备并发识别 ${pages.length} 页` });
       let completed = 0;
-      const categoryPayload = categories.map((item) => ({ id: item.id, path: pathOf(item.id) }));
+      const categoryPayload = moduleCategories.map((item) => ({ id: item.id, path: pathOf(item.id) }));
       const recognizedPages = await mapWithConcurrency(pages, FILE_IMPORT_CONCURRENCY, async (page) => {
         let lastError = "本页识别失败";
         try {
@@ -260,7 +348,7 @@ export default function Home() {
         }
       });
       if (controller.signal.aborted) return;
-      const imported: FileImportDraft[] = []; const pageErrors: string[] = []; const seen = new Set<string>(); const seenNumbers = new Set<string>(); const importStartedAt = Date.now();
+      const imported: FileImportDraft[] = []; const pageErrors: string[] = []; const seen = new Set<string>(); const seenNumbers = new Set<string>(); const importStartedAt = currentTimestamp();
       for (const recognized of recognizedPages.sort((a, b) => a.page.pageNumber - b.page.pageNumber)) {
         if ("error" in recognized) { pageErrors.push(`第 ${recognized.page.pageNumber} 页：${recognized.error}`); continue; }
         if (recognized.page.documentSection === "answers") continue;
@@ -274,12 +362,12 @@ export default function Home() {
             try {
               const rebuilt = await requestVectorDiagramReconstruction(item.stem, extracted.diagramImage!, item.diagram_quality);
               if (rebuilt.skipped) item.warnings = [...item.warnings, rebuilt.reason];
-              else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now() };
+              else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: currentTimestamp() };
             } catch (error) { item.warnings = [...item.warnings, `高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`]; }
           }
           const timestamp = orderedImportTimestamp(importStartedAt, imported.length); const categoryId = item.suggested_category_id && categories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
           const normalized = normalizeAnswerFields(item.answer, item.analysis);
-          imported.push({ id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: item.tags, diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
+          imported.push({ id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, provenance: "来源待核实", examYear: "", stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: item.tags, diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
         }
       }
       for (const recognized of recognizedPages) {
@@ -354,10 +442,10 @@ export default function Home() {
     const saved: Question[] = selected.map((item) => {
       const question = { ...item } as Partial<FileImportDraft>;
       delete question.importId; delete question.selected; delete question.documentNumber;
-      return { ...question, stem: item.stem.trim(), stemParagraphs: item.stem.split(/\r?\n/).filter((line) => line.length > 0), options: item.options.map((option) => option.trim()).filter(Boolean), updatedAt: Date.now() } as Question;
+      return { ...question, moduleId: activeModule?.id, stem: item.stem.trim(), stemParagraphs: item.stem.split(/\r?\n/).filter((line) => line.length > 0), options: item.options.map((option) => option.trim()).filter(Boolean), updatedAt: currentTimestamp() } as Question;
     });
     try {
-      const uploaded = await Promise.all(saved.map(async (question) => (await createCloudQuestion(question)).question));
+      const uploaded = await Promise.all(saved.map(async (question) => (await createCloudQuestion(question, libraryScope)).question));
       setQuestions((current) => [...uploaded, ...current].sort((a, b) => b.createdAt - a.createdAt)); setFileImportOpen(false); setNotice(`已从文件录入 ${uploaded.length} 道云端试题`);
     } catch (error) { setNotice(error instanceof Error ? error.message : "文件题目保存失败"); }
   }
@@ -390,27 +478,27 @@ export default function Home() {
     if (!questionDraft) return;
     setIsRecognizing(true); setRecognitionError("");
     try {
-      const recognitionStartedAt = performance.now();
+      const recognitionStartedAt = monotonicTime();
       const uploadImage = await materializeImageDataUrl(image);
-      const response = await fetch("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: uploadImage, categories: categories.map((item) => ({ id: item.id, path: pathOf(item.id) })) }) });
+      const response = await fetch("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: uploadImage, categories: moduleCategories.map((item) => ({ id: item.id, path: pathOf(item.id) })) }) });
       const payload = await response.json() as { result?: RecognitionQuestionResult; error?: string; code?: string };
-      if (!response.ok || !payload.result) throw new Error(payload.code === "MISSING_API_KEY" ? "智能识别尚未配置。请关闭后通过“启动 Mitty 的宝藏题库”重新打开，并按提示填写 Sub2API 地址、Key 和视觉模型。" : payload.error || "识别失败，请重试");
+      if (!response.ok || !payload.result) throw new Error(payload.code === "MISSING_API_KEY" ? "智能识别尚未配置。请检查本地 Sub2API 地址、Key 和视觉模型。" : payload.error || "识别失败，请重试");
       const result = payload.result;
       const extracted = await extractRecognizedDiagram(image, result);
       let reconstruction: Partial<Question> = extracted.fields;
       const warnings = extracted.warnings;
-      const recognitionDurationMs = Math.round(performance.now() - recognitionStartedAt);
+      const recognitionDurationMs = Math.round(monotonicTime() - recognitionStartedAt);
       const baseDraft: Partial<Question> = { type: result.type, difficulty: result.difficulty, stem: result.stem, options: result.options.length ? result.options : [], answer: cleanRecognizedAnswer(result.answer), analysis: cleanRecognizedAnalysis(result.analysis), source: result.source, tags: result.tags, categoryId: result.suggested_category_id && categories.some((item) => item.id === result.suggested_category_id) ? result.suggested_category_id : questionDraft.categoryId, originalImage: image, diagramBox: result.diagram_bbox ?? undefined, recognitionConfidence: result.confidence, recognitionWarnings: warnings, recognitionDurationMs, ...reconstruction };
       setQuestionDraft((current) => current ? { ...current, ...baseDraft } : current);
       setIsRecognizing(false);
       if (shouldReconstructRecognizedDiagram(extracted.diagramImage, result.diagram_quality, enableVectorReconstruction)) {
         setIsReconstructingDiagram(true);
         setNotice(`文字识别已完成（${(recognitionDurationMs / 1000).toFixed(1)} 秒），正在后台高清重绘配图`);
-        const reconstructionStartedAt = performance.now();
+        const reconstructionStartedAt = monotonicTime();
         try {
           const rebuilt = await requestVectorDiagramReconstruction(result.stem, extracted.diagramImage!, result.diagram_quality);
           if (rebuilt.skipped) warnings.push(rebuilt.reason);
-          else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now(), diagramReconstructionDurationMs: Math.round(performance.now() - reconstructionStartedAt) };
+          else reconstruction = { diagramOriginalImage: extracted.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: currentTimestamp(), diagramReconstructionDurationMs: Math.round(monotonicTime() - reconstructionStartedAt) };
         } catch (error) { warnings.push(`高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`); }
         finally { setIsReconstructingDiagram(false); }
         setQuestionDraft((current) => current?.originalImage === image ? { ...current, ...reconstruction, recognitionWarnings: warnings } : current);
@@ -428,13 +516,13 @@ export default function Home() {
     try {
       if (questionDraft.vectorDiagramPlan?.strokes?.length) {
         const rendered = await renderVectorDiagramPlan(questionDraft.vectorDiagramPlan, original, { allowSourceAnnotations: isPhotographedDiagram(questionDraft.diagramQuality) });
-        setQuestionDraft({ ...questionDraft, diagramOriginalImage: original, diagramImage: rendered.image, diagramSource: "svg-ai", vectorDiagramSvg: rendered.svg, diagramVisualFitScore: rendered.visualFitScore, diagramReconstructedAt: Date.now() });
+        setQuestionDraft({ ...questionDraft, diagramOriginalImage: original, diagramImage: rendered.image, diagramSource: "svg-ai", vectorDiagramSvg: rendered.svg, diagramVisualFitScore: rendered.visualFitScore, diagramReconstructedAt: currentTimestamp() });
         setNotice("高清矢量图已重新渲染");
         return;
       }
       const rebuilt = await requestVectorDiagramReconstruction(questionDraft.stem, original, questionDraft.diagramQuality);
       if (rebuilt.skipped) throw new Error(rebuilt.reason);
-      setQuestionDraft({ ...questionDraft, diagramOriginalImage: original, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: Date.now() });
+      setQuestionDraft({ ...questionDraft, diagramOriginalImage: original, diagramImage: rebuilt.image, diagramSource: "svg-ai", vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: currentTimestamp() });
       setNotice("高清矢量重绘已更新");
     } catch (error) { setRecognitionError(error instanceof Error ? error.message : "高清矢量重绘失败"); }
     finally { setIsReconstructingDiagram(false); }
@@ -496,7 +584,7 @@ export default function Home() {
       source: optimizationPreview.source,
       tags: optimizationPreview.tags,
       imageLayout: questionImages(questionDraft).length ? optimizationPreview.image_layout : "below",
-      optimizedAt: Date.now(),
+      optimizedAt: currentTimestamp(),
       stemDocxXml: undefined,
       stemDocxAssets: undefined,
       optionsDocxXml: undefined,
@@ -523,25 +611,18 @@ export default function Home() {
 
   async function persistQuestion() {
     if (!questionDraft || !questionDraft.stem.trim() || !questionDraft.categoryId) { setNotice("请填写题干并选择分类"); return; }
-    const timestamp = Date.now();
-    const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
+    const timestamp = currentTimestamp();
+    const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), moduleId: questionDraft.moduleId || activeModule?.id, provenance: normalizeQuestionProvenance(questionDraft.provenance), examYear: questionDraft.examYear?.trim(), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
     try {
-      const result = questionDraft.id ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
+      const result = questionDraft.id ? await updateCloudQuestion(saved, libraryScope) : await createCloudQuestion(saved, libraryScope);
       setQuestions((current) => [result.question, ...current.filter((item) => item.id !== result.question.id)].sort((a, b) => b.createdAt - a.createdAt));
       setQuestionDraft(null); setNotice(questionDraft.id ? "云端试题已更新" : "试题已保存到云端");
     } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败"); }
   }
 
-  async function duplicateQuestion(question: Question) {
-    if (!requireLogin()) return;
-    const copy = { ...question, id: uid("q"), stem: `${question.stem}（副本）`, createdAt: Date.now(), updatedAt: Date.now() };
-    try { const result = await createCloudQuestion(copy); setQuestions((current) => [result.question, ...current]); setNotice("已复制到自己的云端题库"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "复制失败"); }
-  }
-
   async function deleteQuestion(question: Question) {
     if (!window.confirm("确定删除这道试题吗？此操作无法撤销。")) return;
-    try { await deleteCloudQuestion(question.id); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice("试题已删除"); }
+    try { await deleteCloudQuestion(question.id, libraryScope); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice("试题已删除"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); }
   }
 
@@ -551,7 +632,7 @@ export default function Home() {
     const editableIds = ids.filter((id) => questions.find((item) => item.id === id)?.canEdit);
     if (!editableIds.length) { setBatchDeleteOpen(false); setNotice("所选题目中没有你可以删除的内容"); return; }
     try {
-      await Promise.all(editableIds.map(deleteCloudQuestion));
+      await Promise.all(editableIds.map((id) => deleteCloudQuestion(id, libraryScope)));
       setQuestions((current) => current.filter((item) => !editableIds.includes(item.id)));
       setExpandedAnswers((current) => current.filter((id) => !editableIds.includes(id)));
       setSelectedIds((current) => current.filter((id) => !editableIds.includes(id))); setBatchDeleteOpen(false); setNotice(`已删除 ${editableIds.length} 道有权限的试题`);
@@ -559,32 +640,124 @@ export default function Home() {
   }
 
   async function createCategory() {
-    if (!categoryName.trim()) { setNotice("请填写分类名称"); return; }
-    const category: Category = { id: uid("cat"), name: categoryName.trim(), parentId: categoryParent || null, createdAt: Date.now() };
-    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); setNotice("云端分类已创建"); }
+    if (!categoryName.trim() || !activeModule) { setNotice("请填写分类名称"); return; }
+    const category: Category = { id: uid("cat"), name: categoryName.trim(), moduleId: activeModule.id, parentId: categoryParent || activeModule.id, createdAt: currentTimestamp() };
+    try { const result = await createCloudCategory(category, libraryScope); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); setNotice("分类已创建"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "分类创建失败"); }
   }
 
   async function deleteCategory(category: Category) {
     const categoryIds = descendantsOf(category.id); const questionIds = questions.filter((item) => categoryIds.includes(item.categoryId)).map((item) => item.id);
     if (!window.confirm(`删除“${category.name}”会同时删除其子分类和 ${questionIds.length} 道试题。确定继续吗？`)) return;
-    try { await deleteCloudCategory(category.id); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(categories.find((item) => item.parentId === null && !categoryIds.includes(item.id))?.id ?? null); setNotice("分类已删除"); }
+    try { await deleteCloudCategory(category.id, libraryScope); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(activeModule?.id ?? null); setNotice("分类已删除"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "分类删除失败"); }
   }
 
   function exportBackup() {
-    const blob = new Blob([JSON.stringify({ categories, questions }, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `Mitty宝藏题库备份-${new Date().toISOString().slice(0, 10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("备份文件已导出");
+    const data: LibraryData = { scope: libraryScope, modules, categories, questions, publishedAt };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `Mitty${libraryScope === "public" ? "公共" : "私人"}题库备份-${new Date().toISOString().slice(0, 10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("备份文件已导出");
   }
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; if (!file) return;
-    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!window.confirm("导入后会把备份中的分类和题目追加到云端题库，是否继续？")) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); setNotice(`已迁移 ${result.imported} 道题到云端`); } catch (error) { setNotice(error instanceof Error ? error.message : "无法识别这个备份文件"); } finally { event.target.value = ""; }
+    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!window.confirm("导入后会把备份中的模块、分类和题目追加到当前题库，是否继续？")) return; const result = await importCloudLibrary(data, libraryScope); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); setNotice(`已迁移 ${result.imported} 道题到当前题库`); } catch (error) { setNotice(error instanceof Error ? error.message : "无法识别这个备份文件"); } finally { event.target.value = ""; }
   }
 
   async function generateWord() {
     if (!selectedQuestions.length) return;
-    try { await authorizeDownload(); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers); setExportDialog(false); setNotice("Word 练习已生成"); }
+    try { await authorizeDownload(libraryScope, selectedIds); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers); setExportDialog(false); setNotice("Word 练习已生成"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "下载失败"); }
+  }
+
+  function openNewModule() {
+    if (!requireLogin() || !canManageLibrary) return;
+    setModuleDraft(null); setModuleName(""); setModuleSubtitle(""); setModuleDialog("new");
+  }
+
+  function openModuleEditor(module: LibraryModule) {
+    setModuleDraft(module); setModuleName(module.name); setModuleSubtitle(module.subtitle); setModuleDialog("new");
+  }
+
+  async function saveModule() {
+    if (!moduleName.trim()) { setNotice("请填写模块名称"); return; }
+    try {
+      if (moduleDraft) {
+        const result = await updateCloudModule({ ...moduleDraft, name: moduleName.trim(), subtitle: moduleSubtitle.trim() }, libraryScope);
+        setModules((current) => current.map((item) => item.id === result.module.id ? result.module : item));
+        if (activeModuleId === result.module.id) setPaperTitle(`${result.module.name}专项练习`);
+        setNotice("模块已更新");
+      } else {
+        const result = await createCloudModule({ name: moduleName.trim(), subtitle: moduleSubtitle.trim() }, libraryScope);
+        setModules((current) => [...current, result.module]); setActiveModuleId(result.module.id); setActiveCategory(result.module.id); setPaperTitle(`${result.module.name}专项练习`);
+        setNotice("模块已创建");
+      }
+      setModuleDialog(null); setModuleDraft(null); setModuleName(""); setModuleSubtitle("");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "模块保存失败"); }
+  }
+
+  async function moveModule(id: string, direction: -1 | 1) {
+    const index = modules.findIndex((item) => item.id === id); const target = index + direction;
+    if (index < 0 || target < 0 || target >= modules.length) return;
+    const next = [...modules]; [next[index], next[target]] = [next[target], next[index]];
+    const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder }));
+    setModules(ordered);
+    try { await reorderCloudModules(ordered.map((item) => item.id), libraryScope); }
+    catch (error) { await refreshLibrary(true); setNotice(error instanceof Error ? error.message : "模块排序失败"); }
+  }
+
+  async function dropModule(targetId: string) {
+    if (!draggedModuleId || draggedModuleId === targetId) { setDraggedModuleId(""); return; }
+    const source = modules.find((item) => item.id === draggedModuleId); const targetIndex = modules.findIndex((item) => item.id === targetId);
+    if (!source || targetIndex < 0) return;
+    const next = modules.filter((item) => item.id !== draggedModuleId); next.splice(targetIndex, 0, source);
+    const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder })); setModules(ordered); setDraggedModuleId("");
+    try { await reorderCloudModules(ordered.map((item) => item.id), libraryScope); }
+    catch (error) { await refreshLibrary(true); setNotice(error instanceof Error ? error.message : "模块排序失败"); }
+  }
+
+  async function confirmDeleteModule() {
+    if (!deleteModuleTarget) return;
+    try {
+      await deleteCloudModule(deleteModuleTarget.id, deleteModuleConfirmation, libraryScope);
+      const removedId = deleteModuleTarget.id;
+      const next = modules.filter((item) => item.id !== removedId);
+      const removedQuestions = questions.filter((item) => item.moduleId === removedId).map((item) => item.id);
+      setModules(next); setCategories((current) => current.filter((item) => item.moduleId !== removedId)); setQuestions((current) => current.filter((item) => item.moduleId !== removedId));
+      setSelectedIds((current) => current.filter((id) => !removedQuestions.includes(id)));
+      setDeleteModuleTarget(null); setDeleteModuleConfirmation(""); setModuleDialog(null);
+      setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
+      setNotice("模块及其内容已删除");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
+  }
+
+  async function openCopyDialog() {
+    if (!requireLogin() || libraryScope !== "public" || !selectedIds.length) return;
+    try {
+      const data = await fetchLibrary("mine"); setCopyTargetData(data);
+      const first = data.modules[0]; setCopyTargetModule(first?.id ?? ""); setCopyTargetCategory(first?.id ?? ""); setCopyDialog(true);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "无法读取私人题库"); }
+  }
+
+  async function confirmCopyQuestions() {
+    if (!copyTargetModule) { setNotice("请先在私人题库创建模块"); return; }
+    try {
+      const result = await copyPublicQuestions(selectedIds, copyTargetModule, copyTargetCategory || copyTargetModule);
+      setCopyDialog(false); setNotice(`已复制 ${result.copied} 道题到私人题库`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "复制题目失败"); }
+  }
+
+  async function publishLibrary() {
+    if (!authUser?.local || libraryScope !== "public") return;
+    if (!window.confirm("将当前公共编辑库完整发布到线上，线上多余内容也会删除。确定继续吗？")) return;
+    setIsPublishing(true); setPublicationFailed(false); setPublicationProgress({ phase: "snapshot", current: 0, total: 1, label: "正在准备发布快照" }); setNotice("正在比对差异并上传变更资源…");
+    try {
+      const result = await publishPublicLibrary(setPublicationProgress); setPublishedAt(result.publishedAt);
+      const changed = result.diff.modules.added + result.diff.modules.updated + result.diff.modules.deleted
+        + result.diff.categories.added + result.diff.categories.updated + result.diff.categories.deleted
+        + result.diff.questions.added + result.diff.questions.updated + result.diff.questions.deleted;
+      setNotice(`发布完成：${changed} 项内容变更，${result.diff.missingAssets} 个新资源`);
+    } catch (error) { setPublicationFailed(true); setNotice(error instanceof Error ? error.message : "公共资源库发布失败"); }
+    finally { setIsPublishing(false); }
   }
 
   function renderTree(parentId: string | null, depth = 0) {
@@ -598,39 +771,61 @@ export default function Home() {
     ));
   }
 
+  function renderModuleTree() {
+    if (!activeModule) return <p className="empty-tree">请先创建一个模块</p>;
+    return <>
+      <button className={`tree-row module-root ${activeCategory === activeModule.id && !showSelected ? "active-leaf" : ""}`} onClick={() => { setActiveCategory(activeModule.id); setShowSelected(false); }}>
+        <span className="tree-dot">◆</span><span className="tree-name">{activeModule.name}</span><span className="count">{countFor(activeModule.id)}</span>
+      </button>
+      {renderTree(activeModule.id, 1)}
+    </>;
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark">题</span><div><strong>Mitty</strong><span>的宝藏题库</span></div></div>
-        <nav aria-label="主导航"><button className={`nav-item ${!showSelected ? "active" : ""}`} onClick={() => setShowSelected(false)}>题库</button>{authUser && <button className={`nav-item ${showSelected ? "active" : ""}`} onClick={() => setShowSelected(true)}>我的组卷{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button>}</nav>
-        <div className="account-area">{authLoading ? <span className="guest-badge">正在连接云端…</span> : authUser ? <><span className="user-chip"><b>{authUser.local ? "本地管理员" : authUser.role === "admin" ? "管理员" : "会员"}</b>{authUser.local ? "无需登录" : authUser.email}</span>{!authUser.local && <button className="account-button" onClick={signOut}>退出</button>}<button className="primary-button" onClick={openNewQuestion}><span>＋</span> 新建试题</button></> : <><span className="guest-badge">访客 · 仅浏览</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>登录 / 注册</button></>}</div>
+        <nav className="library-entries" aria-label="题库入口"><button className={`nav-item ${libraryScope === "public" && !showSelected ? "active" : ""}`} onClick={() => switchLibraryScope("public")}>公共资源库</button><button className={`nav-item ${libraryScope === "mine" && !showSelected ? "active" : ""}`} onClick={() => switchLibraryScope("mine")}>我的题库</button>{authUser && <button className={`nav-item ${showSelected ? "active" : ""}`} onClick={() => setShowSelected(true)}>组卷篮{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button>}</nav>
+        <div className="account-area"><div className="theme-switch" role="group" aria-label="显示模式"><button className={colorTheme === "light" ? "active" : ""} aria-label="浅色模式" aria-pressed={colorTheme === "light"} onClick={() => chooseColorTheme("light")}><span aria-hidden="true">☀</span><b>浅色</b></button><button className={colorTheme === "dark" ? "active" : ""} aria-label="深色模式" aria-pressed={colorTheme === "dark"} onClick={() => chooseColorTheme("dark")}><span aria-hidden="true">☾</span><b>深色</b></button></div>{authLoading ? <span className="guest-badge">正在连接云端…</span> : authUser ? <><span className="user-chip"><b>{authUser.local ? "本地管理员" : authUser.role === "admin" ? "管理员" : "会员"}</b>{authUser.local ? "无需登录" : authUser.email}</span>{!authUser.local && <button className="account-button" onClick={signOut}>退出</button>}{canManageLibrary && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> 新建试题</button>}</> : <><span className="guest-badge">访客 · 仅浏览</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>登录 / 注册</button></>}</div>
       </header>
 
       <section className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><div><span className="eyebrow">共享分类</span><h2>知识目录</h2></div>{authUser && <button className="icon-button" aria-label="添加分类" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋</button>}</div>
-          <div className="tree">{categories.length ? renderTree(null) : <p className="empty-tree">还没有分类，点击右上角＋创建</p>}</div>
-          {authUser ? <button className="manage-button" onClick={() => setCategoryDialog("manage")}>⚙ 分类与数据管理</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>登录后录题与下载</button>}
+          <div className="sidebar-heading"><div><span className="eyebrow">{activeModule?.name ?? (libraryScope === "public" ? "公共资源库" : "我的题库")}</span><h2>知识目录</h2></div>{canManageLibrary && activeModule && <button className="icon-button" aria-label="添加分类" title="添加分类" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋</button>}</div>
+          <div className="tree">{renderModuleTree()}</div>
+          {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>分类与数据管理</button> : !authUser ? <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>登录后可下载</button> : <span className="sidebar-readonly">公共库由本地管理员维护</span>}
         </aside>
 
         <section className="content">
+          <div className="library-context-bar"><div><b>{libraryScope === "public" ? "公共资源库" : "我的题库"}</b><span>{libraryScope === "public" ? authUser ? "可浏览、复制和导出 Word" : "访客可浏览，登录后可下载" : "仅你可见的独立题库"}</span>{authUser?.local && libraryScope === "public" && publicationProgress && <span className={`publication-progress ${publicationFailed ? "failed" : ""}`}><i><em style={{ width: `${publicationProgress.total ? Math.max(publicationProgress.phase === "complete" ? 100 : 8, publicationProgress.current / publicationProgress.total * 100) : 8}%` }} /></i>{publicationFailed ? `发布失败 · ${publicationProgress.label}` : publicationProgress.label}</span>}</div>{libraryScope === "public" && publishedAt && <small>最近发布 {new Date(publishedAt).toLocaleString("zh-CN")}</small>}{authUser?.local && libraryScope === "public" && <button className="secondary" disabled={isPublishing} onClick={publishLibrary}>{isPublishing ? "正在发布…" : publicationFailed ? "重试发布" : "发布公共资源库"}</button>}{canManageLibrary && <button className="secondary" onClick={() => setModuleDialog("manage")}>管理模块</button>}</div>
+          <div className="module-switcher" aria-label="题库模块">
+            {modules.map((examModule, index) => <button key={examModule.id} className={activeModule?.id === examModule.id && !showSelected ? "active" : ""} onClick={() => switchExamModule(examModule.id)}>
+              <span>{String(index + 1).padStart(2, "0")}</span><div><b>{examModule.name}</b><small>{examModule.subtitle || "未设置副标题"}</small></div><em>{countFor(examModule.id)} 题</em>
+            </button>)}
+            {canManageLibrary && <button className="module-add" onClick={openNewModule}><span>＋</span><div><b>新建模块</b><small>自定义名称和副标题</small></div></button>}
+          </div>
           <div className="content-head">
-            <div><p className="breadcrumb">{showSelected ? "组卷篮" : activeCategory ? pathOf(activeCategory) : "题库"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · 云端共享题库{authUser ? authUser.local ? " · localhost 本地管理员" : ` · 已登录为${authUser.role === "admin" ? "管理员" : "会员"}` : " · 访客可直接浏览"}</p></div>
-            <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索试题" placeholder="搜索题干、答案、来源…" /></label>
+            <div><p className="breadcrumb">{showSelected ? "当前题库组卷篮" : activeCategory ? pathOf(activeCategory) : activeModule?.name ?? "尚无模块"}</p><h1>{activeName}</h1><p className="subtext">{filteredQuestions.length} 道试题 · {showSelected ? "可跨当前题库的模块组卷" : activeModule ? `${activeModule.name}模块` : "创建第一个模块后开始录题"}{authUser ? authUser.local ? " · localhost 本地管理员" : ` · 已登录为${authUser.role === "admin" ? "管理员" : "会员"}` : " · 访客可直接浏览"}</p></div>
+            <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索试题" placeholder="搜索题干、年份、来源或知识点…" /></label>
+          </div>
+          <div className="provenance-filters" aria-label="题目属性筛选">
+            <span>题目属性</span>
+            <button className={provenanceFilter === "全部" ? "active" : ""} onClick={() => setProvenanceFilter("全部")}>全部 <b>{showSelected ? selectedQuestions.length : categoryQuestions.length}</b></button>
+            {QUESTION_PROVENANCES.map((provenance) => <button key={provenance} className={provenanceFilter === provenance ? "active" : ""} onClick={() => setProvenanceFilter(provenance as QuestionProvenance)}>{provenance} <b>{(showSelected ? selectedQuestions : categoryQuestions).filter((item) => normalizeQuestionProvenance(item.provenance) === provenance).length}</b></button>)}
           </div>
           <div className="filters">
-            <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>全部题型 <span>{questions.length}</span></button>
-            {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{type.replace("单选题", "选择题")} <span>{questions.filter((item) => item.type === type).length}</span></button>)}
+            <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>全部题型 <span>{showSelected ? selectedQuestions.length : categoryQuestions.length}</span></button>
+            {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{type.replace("单选题", "选择题")} <span>{(showSelected ? selectedQuestions : categoryQuestions).filter((item) => item.type === type).length}</span></button>)}
             {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消全选" : "全选当前结果"}</button>}
           </div>
           <div className="question-list">
-            {!filteredQuestions.length && <div className="empty-state"><div>空</div><h3>{showSelected ? "还没有勾选试题" : "这里还没有试题"}</h3><p>{showSelected ? "回到题库勾选需要组卷的题目" : authUser ? "新建一道试题，开始完善共享题库" : "登录后可以录入第一道试题"}</p><button onClick={showSelected ? () => setShowSelected(false) : openNewQuestion}>{showSelected ? "返回题库" : authUser ? "新建试题" : "登录"}</button></div>}
+            {!filteredQuestions.length && <div className="empty-state"><div>空</div><h3>{showSelected ? "还没有勾选试题" : !activeModule ? libraryScope === "mine" ? "创建你的第一个模块" : "公共资源库尚无模块" : `${activeModule.name}还没有试题`}</h3><p>{showSelected ? "回到任一模块勾选需要组卷的题目" : !activeModule ? libraryScope === "mine" ? "模块可以是考试、学科或你习惯的任意分组" : "等待本地管理员发布内容" : canManageLibrary ? `向${activeModule.name}录入第一道试题` : "当前模块暂无可浏览资源"}</p>{showSelected && activeModule ? <button onClick={() => switchExamModule(activeModule.id)}>返回题库</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? "新建试题" : "创建模块"}</button> : null}</div>}
             {filteredQuestions.map((question, index) => {
               const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question);
               return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
                 {authUser && <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
                 <div className="question-main">
-                  <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span>{question.diagramSource === "svg-ai" ? <span className="geogebra-badge">高清矢量重绘</span> : question.diagramSource === "geogebra-ai" ? <span className="geogebra-badge">旧版 GeoGebra 重绘</span> : question.originalImage ? <span className="image-badge">图像识别</span> : images.length ? <span className="image-badge">题目配图</span> : null}{question.optimizedAt && <span className="optimized-badge">AI 已优化</span>}<em>{pathOf(question.categoryId)}</em></div>
+                  <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span><span className={`provenance-badge provenance-${normalizeQuestionProvenance(question.provenance) === "真题" ? "real" : normalizeQuestionProvenance(question.provenance) === "风格题" ? "style" : "pending"}`}>{normalizeQuestionProvenance(question.provenance)}{question.examYear ? ` · ${question.examYear}` : ""}</span>{question.diagramSource === "svg-ai" ? <span className="geogebra-badge">高清矢量重绘</span> : question.diagramSource === "geogebra-ai" ? <span className="geogebra-badge">旧版 GeoGebra 重绘</span> : question.originalImage ? <span className="image-badge">图像识别</span> : images.length ? <span className="image-badge">题目配图</span> : null}{question.optimizedAt && <span className="optimized-badge">AI 已优化</span>}<em>{pathOf(question.categoryId)}</em></div>
                   <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}${compactConclusion ? " compact-conclusion" : ""}` : ""}`}>
                     <div className="question-copy">
                       <div className="stem"><b className="question-number">{index + 1}.</b><div className="stem-body">{question.source && <span className="question-source">（{question.source}）</span>}<DocxContent xml={question.stemDocxXml} fallback={question.stem} stripLeadingQuestionNumber /></div></div>
@@ -641,7 +836,7 @@ export default function Home() {
                   </div>
                   {!!question.tags?.length && <div className="tag-row">{question.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
                   {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><div className="analysis-content"><DocxContent xml={question.analysisDocxXml} fallback={question.analysis} /></div></>}</div>}
-                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? "收起解析" : "查看解析"}</button>{question.createdByEmail && <small>由 {question.createdByEmail} 录入</small>}<span></span>{authUser && <button onClick={() => duplicateQuestion(question)}>复制到我的题库</button>}{question.canEdit && <><button onClick={() => openEditQuestion(question)}>编辑</button><button className="danger-text" onClick={() => deleteQuestion(question)}>删除</button></>}</div>
+                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? "收起解析" : "查看解析"}</button>{question.createdByEmail && <small>由 {question.createdByEmail} 录入</small>}<span></span>{question.canEdit && <><button onClick={() => openEditQuestion(question)}>编辑</button><button className="danger-text" onClick={() => deleteQuestion(question)}>删除</button></>}</div>
                 </div>
               </article>;
             })}
@@ -649,7 +844,7 @@ export default function Home() {
         </section>
       </section>
 
-      {authUser && <aside className={`paper-dock ${selectedIds.length ? "visible" : ""}`}><div className="dock-count"><strong>{selectedIds.length}</strong><span>已选试题</span></div><div className="dock-title"><span>当前练习</span><b>{paperTitle}</b></div>{selectedIds.some((id) => questions.find((item) => item.id === id)?.canEdit) && <button className="dock-delete-button" onClick={() => setBatchDeleteOpen(true)}>删除可管理题目</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>清空</button><button className="export-button" onClick={() => setExportDialog(true)}>生成 Word <span>→</span></button></aside>}
+      {authUser && <aside className={`paper-dock ${selectedIds.length ? "visible" : ""}`}><div className="dock-count"><strong>{selectedIds.length}</strong><span>已选试题</span></div><div className="dock-title"><span>{libraryScope === "public" ? "公共库练习" : "私人库练习"}</span><b>{paperTitle}</b></div>{libraryScope === "public" && <button className="ghost-button" onClick={openCopyDialog}>复制到我的题库</button>}{selectedIds.some((id) => questions.find((item) => item.id === id)?.canEdit) && <button className="dock-delete-button" onClick={() => setBatchDeleteOpen(true)}>删除可管理题目</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>清空</button><button className="export-button" onClick={() => setExportDialog(true)}>生成 Word <span>→</span></button></aside>}
 
       {questionDraft && <div className="modal-backdrop">
         <section className="modal question-modal" role="dialog" aria-modal="true" aria-label="试题编辑" onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); if (entryMode === "screenshot") handleQuestionImage(file); else handleManualImages([file]); } }}>
@@ -667,7 +862,8 @@ export default function Home() {
           {entryMode === "screenshot" && recognitionError && <div className="recognition-error"><b>暂时无法自动识别</b><span>{recognitionError}</span></div>}
           {entryMode === "screenshot" && !!questionDraft.recognitionWarnings?.length && <div className="recognition-warning"><b>请重点核对</b><span>{questionDraft.recognitionWarnings.join("；")}</span></div>}
           <div className="review-divider"><span>{entryMode === "manual" ? "录入题目内容" : "识别结果 · 保存前请检查"}</span></div>
-          <div className="form-grid three"><label>题型<select value={questionDraft.type} onChange={(event) => setQuestionDraft({ ...questionDraft, type: event.target.value as QuestionType })}>{questionTypes.map((item) => <option key={item}>{item}</option>)}</select></label><label>难度<select value={questionDraft.difficulty} onChange={(event) => setQuestionDraft({ ...questionDraft, difficulty: event.target.value as Difficulty })}>{difficulties.map((item) => <option key={item}>{item}</option>)}</select></label><label>所属分类<select value={questionDraft.categoryId} onChange={(event) => setQuestionDraft({ ...questionDraft, categoryId: event.target.value })}><option value="">请选择</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label></div>
+          <div className="form-grid three"><label>题型<select value={questionDraft.type} onChange={(event) => setQuestionDraft({ ...questionDraft, type: event.target.value as QuestionType })}>{questionTypes.map((item) => <option key={item}>{item}</option>)}</select></label><label>难度<select value={questionDraft.difficulty} onChange={(event) => setQuestionDraft({ ...questionDraft, difficulty: event.target.value as Difficulty })}>{difficulties.map((item) => <option key={item}>{item}</option>)}</select></label><label>题目属性<select value={normalizeQuestionProvenance(questionDraft.provenance)} onChange={(event) => setQuestionDraft({ ...questionDraft, provenance: event.target.value as QuestionProvenance })}>{QUESTION_PROVENANCES.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+          <div className="form-grid two"><label>所属分类<select value={questionDraft.categoryId} onChange={(event) => setQuestionDraft({ ...questionDraft, categoryId: event.target.value })}><option value="">请选择</option>{activeModule && <option value={activeModule.id}>{activeModule.name}（模块根目录）</option>}{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label><label>年份 / 场次（选填）<input value={questionDraft.examYear ?? ""} onChange={(event) => setQuestionDraft({ ...questionDraft, examYear: event.target.value })} placeholder="如：2025 第一场" /></label></div>
           <label className="field">题干<textarea rows={4} value={questionDraft.stem} onChange={(event) => setQuestionDraft({ ...questionDraft, stem: event.target.value, stemDocxXml: undefined, stemDocxAssets: undefined })} placeholder="识别后的题干会出现在这里，也可以直接输入…" /></label>
           <div className="formula-hint"><b>可编辑公式</b><span>计算式会自动转为 Word 公式；复杂分式、根式可用 $LaTeX$ 输入，如 $\frac&#123;1&#125;&#123;2&#125;$。</span></div>
           {entryMode === "manual" && <div className="manual-image-editor" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); handleManualImages(Array.from(event.dataTransfer.files)); }}>
@@ -677,7 +873,7 @@ export default function Home() {
           {entryMode === "screenshot" && questionDraft.diagramImage && (questionDraft.diagramSource === "svg-ai" && questionDraft.diagramOriginalImage ? <div className="diagram-review geogebra-review"><div><span className="eyebrow">原图坐标高清矢量重绘</span><p>最终图直接使用原图坐标，不再由几何引擎重新摆点。综合视觉匹配度 {Math.round((questionDraft.diagramVisualFitScore ?? 0) * 100)}%，关系识别可信度 {Math.round((questionDraft.diagramReconstructionConfidence ?? 0) * 100)}%。</p></div><div className="diagram-compare"><figure><img src={questionDraft.diagramOriginalImage} alt="重绘前的原始配图" /><figcaption>原始配图</figcaption></figure><figure><img src={questionDraft.diagramImage} alt="高清矢量重绘配图" /><figcaption>高清矢量重绘</figcaption></figure></div><div className="diagram-actions"><button className="secondary" disabled={isReconstructingDiagram} onClick={reconstructCurrentDiagram}>{isReconstructingDiagram ? "正在重绘…" : "重新渲染"}</button><button className="text-button" onClick={() => setQuestionDraft({ ...questionDraft, diagramImage: questionDraft.diagramOriginalImage, diagramOriginalImage: undefined, diagramSource: "extracted", vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined })}>使用原图</button></div></div> : <div className="diagram-review"><div><span className="eyebrow">清理后的独立配图</span><p>{isReconstructingDiagram ? "正在提取原图轮廓、标签位置和视觉比例…" : "已自动从截图中分离，保存后只展示这张图。"}</p></div><img src={questionDraft.diagramImage} alt="识别出的题目配图" /><div className="diagram-actions"><button className="secondary" onClick={beginManualCrop}>手动框选</button>{questionDraft.diagramQuality?.reconstructable && <button className="secondary" disabled={isReconstructingDiagram} onClick={reconstructCurrentDiagram}>高清矢量重绘</button>}<button className="text-button" onClick={() => setQuestionDraft({ ...questionDraft, diagramImage: undefined, diagramBox: undefined, diagramOriginalImage: undefined, diagramSource: undefined, vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined })}>移除</button></div></div>)}
           {!!questionImages(questionDraft).length && <div className="layout-choice"><div><span className="eyebrow">图文排列</span><p>{questionDraft.stemDocxXml?.length ? "文件录入题会按篇幅、分问和配图数量自动选择合适结构。" : isGeometryQuestion(questionDraft) ? "网页端题干左、配图右；导出 Word 时自动改为题干下、配图右。" : "网页端可左右展示以节省空间，Word 导出会使用更稳妥的上下结构。"}</p></div><div>{questionDraft.stemDocxXml?.length ? <button className="active">{resolveQuestionImageLayout(questionDraft) === "right" ? "网页 · 题干左配图右" : resolveQuestionImageLayout(questionDraft) === "below-right" ? "网页 · 题干上配图右下" : "网页 · 题干上配图左下"}</button> : isGeometryQuestion(questionDraft) ? <button className="active">网页 · 题干左配图右</button> : <><button className={(questionDraft.imageLayout ?? "right") === "right" ? "active" : ""} onClick={() => setQuestionDraft({ ...questionDraft, imageLayout: "right" })}>题干左 · 配图右</button><button className={questionDraft.imageLayout === "below" ? "active" : ""} onClick={() => setQuestionDraft({ ...questionDraft, imageLayout: "below" })}>题干上 · 配图下</button></>}</div></div>}
           {["单选题", "多选题"].includes(questionDraft.type) && <div className="field"><span>选项</span><div className="option-inputs">{questionDraft.options.map((option, index) => <label key={index}><b>{String.fromCharCode(65 + index)}</b><input value={option} onChange={(event) => { const options = [...questionDraft.options]; options[index] = event.target.value; setQuestionDraft({ ...questionDraft, options, optionsDocxXml: undefined, optionsDocxAssets: undefined }); }} placeholder={`选项 ${String.fromCharCode(65 + index)}`} /></label>)}</div></div>}
-          <div className="form-grid two"><label>答案<input value={questionDraft.answer} onChange={(event) => setQuestionDraft({ ...questionDraft, answer: event.target.value })} placeholder="如：B 或 √5" /></label><label>来源（选填）<input value={questionDraft.source} onChange={(event) => setQuestionDraft({ ...questionDraft, source: event.target.value })} placeholder="如：2024·武汉模拟" /></label></div>
+          <div className="form-grid two"><label>答案<input value={questionDraft.answer} onChange={(event) => setQuestionDraft({ ...questionDraft, answer: event.target.value })} placeholder="如：B 或 √5" /></label><label>详细来源（选填）<input value={questionDraft.source} onChange={(event) => setQuestionDraft({ ...questionDraft, source: event.target.value })} placeholder={`如：${activeModule?.name ?? "当前模块"}回忆版 · 第 12 题`} /></label></div>
           <label className="field">知识点标签（用逗号分隔）<input value={(questionDraft.tags ?? []).join("，")} onChange={(event) => setQuestionDraft({ ...questionDraft, tags: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean) })} placeholder="如：手拉手模型，旋转型全等" /></label>
           <label className="field">解析（选填）<textarea rows={3} value={questionDraft.analysis} onChange={(event) => setQuestionDraft({ ...questionDraft, analysis: event.target.value, analysisDocxXml: undefined, analysisDocxAssets: undefined })} placeholder="截图中有解析时会自动识别，也可以手工补充…" /></label>
           {optimizationError && <div className="recognition-error"><b>AI 优化未完成</b><span>{optimizationError}</span></div>}
@@ -687,7 +883,7 @@ export default function Home() {
             <div className="optimization-changes"><b>本次调整</b><span>{optimizationPreview.changes.join("；")}</span></div>
             <div className="optimization-actions"><button className="text-button" onClick={() => setOptimizationPreview(null)}>暂不采用</button><button className="primary-button" onClick={applyOptimization}>采用优化结果</button></div>
           </section>}
-          <div className="modal-actions"><small className="save-note">文字与配图将保存到共享云端题库</small><button className="ai-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" onClick={() => setQuestionDraft(null)}>取消</button><button className="primary-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>确认并保存</button></div>
+          <div className="modal-actions"><small className="save-note">真题请注明年份与来源；不确定时保留“来源待核实”</small><button className="ai-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" onClick={() => setQuestionDraft(null)}>取消</button><button className="primary-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>确认并保存</button></div>
         </section>
       </div>}
 
@@ -695,7 +891,7 @@ export default function Home() {
         <div className="modal-head"><div><span className="eyebrow">第三种录题方式</span><h2>PDF / Word 批量录入</h2></div><button className="close" onClick={closeFileImport}>×</button></div>
         {fileImportStep === "choose" && <>
           <div className="file-import-intro"><span>01</span><div><b>整份文件逐页识别</b><p>自动拆分题目、选项、答案和配图，识别后统一校对再保存。</p></div></div>
-          <label className="field">默认存入分类<select value={fileImportCategory} onChange={(event) => setFileImportCategory(event.target.value)}><option value="">请选择分类</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
+          <label className="field">默认存入分类<select value={fileImportCategory} onChange={(event) => setFileImportCategory(event.target.value)}><option value="">请选择分类</option>{activeModule && <option value={activeModule.id}>{activeModule.name}（模块根目录）</option>}{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
           <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择或拖入文件</strong><span>支持 PDF、Word（.docx），最多 80 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
           <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
           {!!fileImportErrors.length && <div className="recognition-error"><b>文件未能读取</b><span>{fileImportErrors.join("；")}</span></div>}
@@ -707,7 +903,7 @@ export default function Home() {
           {!!fileImportErrors.length && <div className="recognition-warning"><b>部分页面需留意</b><span>{fileImportErrors.join("；")}</span></div>}
           {!fileImportDrafts.length ? <div className="file-empty-result"><b>没有识别到完整题目</b><p>请确认文件页面清晰且包含题号，再重新选择文件。</p><button className="secondary" onClick={() => setFileImportStep("choose")}>重新选择</button></div> : <div className="file-draft-list">{fileImportDrafts.map((item, index) => <article className={`file-draft ${item.selected ? "selected" : ""}`} key={item.importId}>
             <div className="file-draft-head"><label><input type="checkbox" checked={item.selected} onChange={(event) => updateImportDraft(item.importId, { selected: event.target.checked })} /><b>第 {index + 1} 题</b></label><span>{item.sourcePage ? `文件第 ${item.sourcePage} 页` : `Word 原题 ${item.documentNumber || index + 1}`} · 可信度 {Math.round((item.recognitionConfidence ?? 0) * 100)}%</span><button onClick={() => setFileImportDrafts((current) => current.filter((entry) => entry.importId !== item.importId))}>移除</button></div>
-            <div className="file-draft-fields"><label>题型<select value={item.type} onChange={(event) => updateImportDraft(item.importId, { type: event.target.value as QuestionType })}>{questionTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>难度<select value={item.difficulty} onChange={(event) => updateImportDraft(item.importId, { difficulty: event.target.value as Difficulty })}>{difficulties.map((difficulty) => <option key={difficulty}>{difficulty}</option>)}</select></label><label className="wide">分类<select value={item.categoryId} onChange={(event) => updateImportDraft(item.importId, { categoryId: event.target.value })}><option value="">请选择</option>{categories.map((category) => <option key={category.id} value={category.id}>{pathOf(category.id)}</option>)}</select></label></div>
+            <div className="file-draft-fields"><label>题型<select value={item.type} onChange={(event) => updateImportDraft(item.importId, { type: event.target.value as QuestionType })}>{questionTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>难度<select value={item.difficulty} onChange={(event) => updateImportDraft(item.importId, { difficulty: event.target.value as Difficulty })}>{difficulties.map((difficulty) => <option key={difficulty}>{difficulty}</option>)}</select></label><label>题目属性<select value={normalizeQuestionProvenance(item.provenance)} onChange={(event) => updateImportDraft(item.importId, { provenance: event.target.value as QuestionProvenance })}>{QUESTION_PROVENANCES.map((provenance) => <option key={provenance}>{provenance}</option>)}</select></label><label className="wide">分类<select value={item.categoryId} onChange={(event) => updateImportDraft(item.importId, { categoryId: event.target.value })}><option value="">请选择</option>{activeModule && <option value={activeModule.id}>{activeModule.name}（模块根目录）</option>}{moduleCategories.map((category) => <option key={category.id} value={category.id}>{pathOf(category.id)}</option>)}</select></label></div>
             <label className="field">题干<textarea rows={3} value={item.stem} onChange={(event) => updateImportDraft(item.importId, { stem: event.target.value })} /></label>
             {!!questionImages(item).length && <div className="file-draft-media"><div className="file-draft-images">{questionImages(item).map((image, imageIndex) => <img src={image} alt={`第 ${index + 1} 题配图 ${imageIndex + 1}`} key={`${item.importId}-preview-${imageIndex}`} />)}</div><span>{item.diagramSource === "svg-ai" ? `高清矢量重绘 · 视觉匹配度 ${Math.round((item.diagramVisualFitScore ?? 0) * 100)}%` : `已保留 ${questionImages(item).length} 张原始配图`}</span></div>}
             {!!importedDocxTableCount(item) && <div className="file-draft-structure">已保留 {importedDocxTableCount(item)} 个 Word 原表格，导出时沿用原行列与公式结构</div>}
@@ -729,7 +925,44 @@ export default function Home() {
         <div className="modal-actions"><button className="secondary" onClick={() => setCropDialog(false)}>取消</button><button className="primary-button" onClick={applyManualCrop}>使用这个范围</button></div>
       </section></div>}
 
-      {categoryDialog && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理"><div className="modal-head"><div><span className="eyebrow">知识目录</span><h2>{categoryDialog === "new" ? "新建分类" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>{categoryDialog === "new" ? <><label className="field">分类名称<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：二次函数" /></label><label className="field">上级分类<select value={categoryParent} onChange={(event) => setCategoryParent(event.target.value)}><option value="">无（设为顶级分类）</option>{categories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div></> : <><div className="manage-list">{categories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{authUser?.role === "admin" && <button onClick={() => deleteCategory(item)}>删除</button>}</div>)}</div><div className="data-tools"><div><b>云端题库备份</b><small>导入会追加到云端；导出可保存一份本地副本。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>迁移本地备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div><div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? ""); setCategoryDialog("new"); }}>＋ 新建分类</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div></>}</section></div>}
+      {categoryDialog && activeModule && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理">
+        <div className="modal-head"><div><span className="eyebrow">{activeModule.name}</span><h2>{categoryDialog === "new" ? "新建模块内分类" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>
+        {categoryDialog === "new" ? <>
+          <label className="field">分类名称<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：二次函数" /></label>
+          <label className="field">上级分类<select value={categoryParent || activeModule.id} onChange={(event) => setCategoryParent(event.target.value)}><option value={activeModule.id}>{activeModule.name}（模块根目录）</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
+          <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div>
+        </> : <>
+          <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span><button onClick={() => deleteCategory(item)}>删除</button></div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>
+          <div className="data-tools"><div><b>{libraryScope === "public" ? "公共编辑库" : "我的题库"}备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>
+          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ 新建分类</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
+        </>}
+      </section></div>}
+
+      {moduleDialog && <div className="modal-backdrop"><section className="modal module-modal" role="dialog" aria-modal="true" aria-label="模块管理">
+        <div className="modal-head"><div><span className="eyebrow">{libraryScope === "public" ? "公共资源库" : "我的题库"}</span><h2>{moduleDialog === "new" ? moduleDraft ? "编辑模块" : "新建模块" : "模块管理"}</h2></div><button className="close" onClick={() => { setModuleDialog(null); setModuleDraft(null); }}>×</button></div>
+        {moduleDialog === "new" ? <>
+          <label className="field">模块名称<input value={moduleName} onChange={(event) => setModuleName(event.target.value)} placeholder="例如：深圳中考" /></label>
+          <label className="field">副标题<input value={moduleSubtitle} onChange={(event) => setModuleSubtitle(event.target.value)} placeholder="例如：数学真题与专题训练" /></label>
+          <div className="modal-actions"><button className="secondary" onClick={() => setModuleDialog(moduleDraft ? "manage" : null)}>取消</button><button className="primary-button" onClick={saveModule}>{moduleDraft ? "保存修改" : "创建模块"}</button></div>
+        </> : <>
+          <div className="module-manage-list">{modules.map((item, index) => <div key={item.id} draggable onDragStart={() => setDraggedModuleId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => dropModule(item.id)}>
+            <span className="drag-handle" title="拖动排序">⋮⋮</span><span><b>{item.name}</b><small>{item.subtitle || "未设置副标题"} · {countFor(item.id)} 题</small></span><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button onClick={() => openModuleEditor(item)}>编辑</button><button className="danger-text" onClick={() => { setDeleteModuleTarget(item); setDeleteModuleConfirmation(""); }}>删除</button></div>
+          </div>)}</div>
+          <div className="modal-actions"><button className="secondary" onClick={openNewModule}>＋ 新建模块</button><button className="primary-button" onClick={() => setModuleDialog(null)}>完成</button></div>
+        </>}
+      </section></div>}
+
+      {deleteModuleTarget && <div className="modal-backdrop modal-backdrop-raised"><section className="modal delete-modal" role="dialog" aria-modal="true" aria-label="删除模块">
+        <div className="modal-head"><div><span className="eyebrow">危险操作</span><h2>删除“{deleteModuleTarget.name}”</h2></div><button className="close" onClick={() => setDeleteModuleTarget(null)}>×</button></div>
+        <div className="delete-summary"><strong>{questions.filter((item) => item.moduleId === deleteModuleTarget.id).length}</strong><div><b>道题及 {categories.filter((item) => item.moduleId === deleteModuleTarget.id).length} 个分类将一并删除</b><p>该操作无法撤销。请输入完整模块名称确认。</p></div></div>
+        <label className="field">输入“{deleteModuleTarget.name}”<input value={deleteModuleConfirmation} onChange={(event) => setDeleteModuleConfirmation(event.target.value)} /></label>
+        <div className="modal-actions"><button className="secondary" onClick={() => setDeleteModuleTarget(null)}>取消</button><button className="danger-button" disabled={deleteModuleConfirmation !== deleteModuleTarget.name} onClick={confirmDeleteModule}>确认删除</button></div>
+      </section></div>}
+
+      {copyDialog && <div className="modal-backdrop"><section className="modal copy-modal" role="dialog" aria-modal="true" aria-label="复制公共题目">
+        <div className="modal-head"><div><span className="eyebrow">复制 {selectedIds.length} 道公共题目</span><h2>存入我的题库</h2></div><button className="close" onClick={() => setCopyDialog(false)}>×</button></div>
+        {copyTargetData?.modules.length ? <><label className="field">目标模块<select value={copyTargetModule} onChange={(event) => { setCopyTargetModule(event.target.value); setCopyTargetCategory(event.target.value); }}>{copyTargetData.modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field">目标分类<select value={copyTargetCategory} onChange={(event) => setCopyTargetCategory(event.target.value)}><option value={copyTargetModule}>{copyTargetData.modules.find((item) => item.id === copyTargetModule)?.name}（模块根目录）</option>{copyTargetData.categories.filter((item) => item.moduleId === copyTargetModule).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCopyDialog(false)}>取消</button><button className="primary-button" onClick={confirmCopyQuestions}>创建独立副本</button></div></> : <div className="copy-empty"><b>私人题库还没有模块</b><p>先切换到“我的题库”创建模块，再回来复制题目。</p><button className="primary-button" onClick={async () => { setCopyDialog(false); await switchLibraryScope("mine"); openNewModule(); }}>创建私人模块</button></div>}
+      </section></div>}
 
       {exportDialog && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="生成 Word"><div className="modal-head"><div><span className="eyebrow">Word 组卷</span><h2>生成练习题</h2></div><button className="close" onClick={() => setExportDialog(false)}>×</button></div><div className="export-summary"><strong>{selectedIds.length}</strong><span>道试题将按勾选顺序排入文档</span></div><label className="field">练习标题<input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} /></label><label className="toggle-row" aria-label="答案设置"><input type="checkbox" checked={includeAnswers} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label><div className="modal-actions"><button className="secondary" onClick={() => setExportDialog(false)}>取消</button><button className="primary-button" onClick={generateWord}>下载 .docx</button></div></section></div>}
 

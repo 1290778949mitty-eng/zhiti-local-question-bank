@@ -1,0 +1,4 @@
+interface:
+  display_name: "题库录入迭代"
+  short_description: "用真实样本推动题库录入与导出的系统级修复和回归保护"
+  default_prompt: "使用 $question-bank-regression 验证这个文档，并把发现的同类问题在系统层面完整解决。"
