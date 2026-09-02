@@ -1,4 +1,4 @@
-import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question } from "./types";
+import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question, Student, StudentSummary, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -24,6 +24,14 @@ export function deleteCloudModule(id: string, confirmation: string, scope: Libra
 export function copyPublicQuestions(questionIds: string[], targetModuleId: string, targetCategoryId: string) { return request<{ questions: Question[]; copied: number }>("/api/library/copy", { method: "POST", body: JSON.stringify({ questionIds, targetModuleId, targetCategoryId }) }); }
 export function importCloudLibrary(data: LibraryData, targetScope: LibraryScope) { return request<{ imported: number; modules: number; categories: number }>("/api/library/import", { method: "POST", body: JSON.stringify({ ...data, targetScope }) }); }
 export function authorizeDownload(scope: LibraryScope, questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ scope, questionIds }) }); }
+export function fetchStudents() { return request<{ students: StudentSummary[] }>("/api/students"); }
+export function createStudent(student: Pick<Student, "name" | "className" | "notes">) { return request<{ student: Student }>("/api/students", { method: "POST", body: JSON.stringify({ student }) }); }
+export function updateStudent(student: Student) { return request<{ student: Student }>(`/api/students/${encodeURIComponent(student.id)}`, { method: "PUT", body: JSON.stringify({ student }) }); }
+export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQuestionCount: number }>(`/api/students/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions`); }
+export function recordWrongQuestions(studentId: string, scope: LibraryScope, questionIds: string[], note = "") { return request<{ recorded: number; created: number; updated: number }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions`, { method: "POST", body: JSON.stringify({ scope, questionIds, note }) }); }
+export function updateWrongQuestion(studentId: string, entryId: string, entry: Partial<Pick<WrongQuestionEntry, "mistakeCount" | "note" | "mastered">>) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PUT", body: JSON.stringify({ entry }) }); }
+export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
 export type PublicationProgress = {
   phase: "snapshot" | "compare" | "assets" | "commit" | "complete";
   current: number;

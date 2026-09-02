@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <rect width="1200" height="1600" fill="#d8d8d8"/>
+  <rect x="90" y="70" width="1020" height="1460" rx="6" fill="white" stroke="#222" stroke-width="6"/>
+  <text x="600" y="150" text-anchor="middle" font-family="Arial,sans-serif" font-size="42" font-weight="700">参考答案与解析</text>
+  <text x="150" y="260" font-family="Arial,sans-serif" font-size="32">1. 答案：5。</text>
+  <text x="150" y="380" font-family="Arial,sans-serif" font-size="32">2. 答案：x = 5。</text>
+  <text x="150" y="500" font-family="Arial,sans-serif" font-size="28">解析：等式两边同时减去 4。</text>
+  <text x="150" y="650" font-family="Arial,sans-serif" font-size="32">3. 答案：180°。</text>
+  <text x="150" y="760" font-family="Arial,sans-serif" font-size="28">解析：过顶点作平行线，利用内错角相等。</text>
+</svg>

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
 
 test("limits automatic administrator access to loopback hostnames", async () => {
   const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
@@ -15,8 +16,12 @@ test("limits automatic administrator access to loopback hostnames", async () => 
 
 test("shows localhost as a passwordless administrator and hides logout", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /authUser\.local \? "本地管理员"/);
-  assert.match(page, /authUser\.local \? "无需登录"/);
-  assert.match(page, /!authUser\.local && <button className="account-button" onClick=\{signOut\}>退出<\/button>/);
-  assert.match(page, /localhost 本地管理员/);
+  assert.equal(ALEVEL_PAGE_COPY.zh.localAdmin, "本地管理员");
+  assert.equal(ALEVEL_PAGE_COPY.zh.noLogin, "无需登录");
+  assert.equal(ALEVEL_PAGE_COPY.zh.localAdminSuffix, "localhost 本地管理员");
+  assert.equal(ALEVEL_PAGE_COPY.en.localAdmin, "Local Admin");
+  assert.match(page, /authUser\.local \? pageCopy\.localAdmin/);
+  assert.match(page, /authUser\.local \? pageCopy\.noLogin/);
+  assert.match(page, /!authUser\.local && <button className="account-button" onClick=\{signOut\}>\{pageCopy\.signOut\}<\/button>/);
+  assert.match(page, /pageCopy\.localAdminSuffix/);
 });

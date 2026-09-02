@@ -17,6 +17,10 @@
     "not_found_handling": "none",
     "binding": "ASSETS"
   },
+  "vars": {
+    "HOMEWORK_GRADING_ENABLED": "true",
+    "HOMEWORK_AUTO_PUBLISH_ENABLED": "false"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -25,6 +29,30 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "HOMEWORK_ASSETS",
+      "bucket_name": "zhiti-homework-assets"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "HOMEWORK_GRADING_QUEUE",
+        "queue": "zhiti-homework-grading"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "zhiti-homework-grading",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "retry_delay": 60,
+        "dead_letter_queue": "zhiti-homework-grading-dlq"
+      }
+    ]
+  },
   "cache": {
     "enabled": true
   }

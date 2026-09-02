@@ -40,6 +40,9 @@ yarn-error.log*
 
 /dist/
 /.wrangler/
+/.codex/config.toml
+/public/opencv.js
+/public/document-scanner-worker.js
 /outputs/
 /work/
 /artifacts/

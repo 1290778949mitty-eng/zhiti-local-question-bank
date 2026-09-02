@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo } from "react";
 import { parseDocxWebContent, parseDocxWebOptions, type DocxWebBlock, type DocxWebInline } from "../../lib/docx-web-content";
+import { plainTextWebLines } from "../../lib/math-text";
 import { MathText } from "./MathText";
 
 function InlineContent({ inlines }: { inlines: DocxWebInline[] }) {
@@ -33,7 +34,9 @@ function Blocks({ blocks, tableDepth = 0 }: { blocks: DocxWebBlock[]; tableDepth
 
 export function DocxContent({ xml, fallback, stripLeadingQuestionNumber = false, className = "" }: { xml?: string[]; fallback: string; stripLeadingQuestionNumber?: boolean; className?: string }) {
   const content = useMemo(() => parseDocxWebContent(xml ?? [], { stripLeadingQuestionNumber }), [xml, stripLeadingQuestionNumber]);
-  if (!content.blocks.length) return <MathText text={fallback} className={className} />;
+  const fallbackLines = useMemo(() => plainTextWebLines(fallback, { stripLeadingQuestionNumber }), [fallback, stripLeadingQuestionNumber]);
+  if (!content.blocks.length) return <div className={`docx-web-content ${className}`.trim()}>{fallbackLines.map((line, index) =>
+    <p className={`docx-web-paragraph align-${line.align}`} key={`fallback-paragraph-${index}`}>{line.value ? <MathText text={line.value} /> : <br />}</p>)}</div>;
   return <div className={`docx-web-content ${className}`.trim()}><Blocks blocks={content.blocks} /></div>;
 }
 

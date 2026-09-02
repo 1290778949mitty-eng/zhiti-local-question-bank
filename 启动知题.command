@@ -37,5 +37,5 @@ fi
 
 echo "知题已启动，浏览器将自动打开。"
 echo "关闭这个窗口即可停止运行。"
-(sleep 2; open "http://localhost:3000") &
+(sleep 2; open "http://127.0.0.1:3001") &
 npm run dev

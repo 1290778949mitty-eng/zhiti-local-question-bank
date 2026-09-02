@@ -1,0 +1,98 @@
+{
+  "version": "cn-math-junior-v1",
+  "title": "中国初中数学知识图谱 V1",
+  "scope": "七至九年级数学课程通用骨架",
+  "status": "foundation",
+  "nodes": [
+    { "key": "cn-math:domain:number-algebra", "label": "数与代数", "level": "domain", "domainKey": "cn-math:domain:number-algebra", "stage": 7, "description": "数、式、方程、不等式与函数", "aliases": ["数与代数", "代数"] },
+    { "key": "cn-math:domain:geometry", "label": "图形与几何", "level": "domain", "domainKey": "cn-math:domain:geometry", "stage": 7, "description": "图形性质、变换、坐标与几何推理", "aliases": ["图形与几何", "几何"] },
+    { "key": "cn-math:domain:statistics-probability", "label": "统计与概率", "level": "domain", "domainKey": "cn-math:domain:statistics-probability", "stage": 7, "description": "数据分析、统计量与随机事件", "aliases": ["统计与概率", "统计", "概率"] },
+    { "key": "cn-math:domain:integrated-application", "label": "综合与应用", "level": "domain", "domainKey": "cn-math:domain:integrated-application", "stage": 7, "description": "在真实或数学情境中综合运用知识", "aliases": ["综合与应用", "综合实践", "应用题"] },
+
+    { "key": "cn-math:topic:rational-numbers", "label": "有理数及其运算", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 7, "description": "理解正负数、有理数及四则运算", "aliases": ["有理数", "正负数", "数轴", "绝对值"] },
+    { "key": "cn-math:topic:algebraic-expressions", "label": "整式与代数式", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 7, "description": "用字母表示数量关系并进行整式运算", "aliases": ["代数式", "整式", "单项式", "多项式", "合并同类项"] },
+    { "key": "cn-math:topic:linear-equation", "label": "一元一次方程", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 7, "description": "建立并求解一元一次方程", "aliases": ["一元一次方程", "解方程"] },
+    { "key": "cn-math:topic:inequality", "label": "一元一次不等式", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 7, "description": "理解不等关系并求解不等式（组）", "aliases": ["不等式", "不等式组", "一元一次不等式"] },
+    { "key": "cn-math:topic:real-numbers", "label": "实数", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 8, "description": "理解平方根、立方根与实数体系", "aliases": ["实数", "平方根", "立方根", "无理数"] },
+    { "key": "cn-math:topic:factorization", "label": "因式分解", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 8, "description": "运用提公因式和公式法分解因式", "aliases": ["因式分解", "平方差公式", "完全平方公式"] },
+    { "key": "cn-math:topic:fractions", "label": "分式", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 8, "description": "理解分式并进行化简、运算和方程求解", "aliases": ["分式", "分式方程"] },
+    { "key": "cn-math:topic:linear-function", "label": "一次函数", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 8, "description": "理解一次函数的图象、性质和应用", "aliases": ["一次函数", "正比例函数", "函数图象"] },
+    { "key": "cn-math:topic:radicals", "label": "二次根式", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 8, "description": "理解二次根式并进行化简与运算", "aliases": ["二次根式", "根式"] },
+    { "key": "cn-math:topic:quadratic-equation", "label": "一元二次方程", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 9, "description": "理解并求解一元二次方程", "aliases": ["一元二次方程", "根的判别式", "根与系数"] },
+    { "key": "cn-math:topic:inverse-proportion", "label": "反比例函数", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 9, "description": "理解反比例函数的图象、性质和应用", "aliases": ["反比例函数", "双曲线"] },
+    { "key": "cn-math:topic:quadratic-function", "label": "二次函数", "level": "micro", "parentKey": "cn-math:domain:number-algebra", "domainKey": "cn-math:domain:number-algebra", "stage": 9, "description": "理解二次函数的图象、性质和应用", "aliases": ["二次函数", "抛物线"] },
+
+    { "key": "cn-math:topic:basic-geometry", "label": "基本几何图形", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 7, "description": "认识线、角及基本几何关系", "aliases": ["线段", "射线", "直线", "角", "余角", "补角"] },
+    { "key": "cn-math:topic:parallel-lines", "label": "相交线与平行线", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 7, "description": "理解相交、垂直、平行及相关角关系", "aliases": ["相交线", "平行线", "垂直", "同位角", "内错角"] },
+    { "key": "cn-math:topic:coordinate-plane", "label": "平面直角坐标系", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 7, "description": "用有序数对和坐标描述位置", "aliases": ["平面直角坐标系", "坐标", "有序数对"] },
+    { "key": "cn-math:topic:triangles", "label": "三角形", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 8, "description": "理解三角形基本性质及特殊线段", "aliases": ["三角形", "三角形内角和", "中线", "高线", "角平分线"] },
+    { "key": "cn-math:topic:congruence", "label": "全等三角形", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 8, "description": "运用全等判定进行几何证明", "aliases": ["全等三角形", "全等", "角平分线性质"] },
+    { "key": "cn-math:topic:axis-symmetry", "label": "轴对称", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 8, "description": "理解轴对称及等腰三角形性质", "aliases": ["轴对称", "等腰三角形", "等边三角形"] },
+    { "key": "cn-math:topic:pythagorean", "label": "勾股定理", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 8, "description": "理解勾股定理及其逆定理", "aliases": ["勾股定理", "直角三角形"] },
+    { "key": "cn-math:topic:parallelogram", "label": "平行四边形", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 8, "description": "理解平行四边形及特殊四边形性质", "aliases": ["平行四边形", "矩形", "菱形", "正方形"] },
+    { "key": "cn-math:topic:similarity", "label": "图形的相似", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 9, "description": "理解比例线段和相似三角形", "aliases": ["相似", "相似三角形", "位似"] },
+    { "key": "cn-math:topic:circle", "label": "圆", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 9, "description": "理解圆的性质、位置关系和计算", "aliases": ["圆", "垂径定理", "圆周角", "切线", "弧长", "扇形"] },
+    { "key": "cn-math:topic:geometric-transformation", "label": "旋转与投影", "level": "micro", "parentKey": "cn-math:domain:geometry", "domainKey": "cn-math:domain:geometry", "stage": 9, "description": "理解旋转、中心对称与投影", "aliases": ["旋转", "中心对称", "投影", "三视图"] },
+
+    { "key": "cn-math:topic:data-collection", "label": "数据的收集与整理", "level": "micro", "parentKey": "cn-math:domain:statistics-probability", "domainKey": "cn-math:domain:statistics-probability", "stage": 7, "description": "设计调查并用统计图表整理数据", "aliases": ["数据收集", "统计图", "频数分布"] },
+    { "key": "cn-math:topic:descriptive-statistics", "label": "数据分析", "level": "micro", "parentKey": "cn-math:domain:statistics-probability", "domainKey": "cn-math:domain:statistics-probability", "stage": 8, "description": "用平均数、中位数、众数和方差分析数据", "aliases": ["平均数", "中位数", "众数", "方差", "数据分析"] },
+    { "key": "cn-math:topic:probability", "label": "概率初步", "level": "micro", "parentKey": "cn-math:domain:statistics-probability", "domainKey": "cn-math:domain:statistics-probability", "stage": 9, "description": "用列举和试验理解随机事件概率", "aliases": ["概率", "随机事件", "树状图", "列表法"] },
+
+    { "key": "cn-math:topic:equation-modeling", "label": "方程建模", "level": "micro", "parentKey": "cn-math:domain:integrated-application", "domainKey": "cn-math:domain:integrated-application", "stage": 7, "description": "从实际情境中提取等量关系", "aliases": ["方程应用题", "列方程", "行程问题", "工程问题"] },
+    { "key": "cn-math:topic:function-modeling", "label": "函数建模", "level": "micro", "parentKey": "cn-math:domain:integrated-application", "domainKey": "cn-math:domain:integrated-application", "stage": 8, "description": "用函数描述变化规律并解决问题", "aliases": ["函数应用题", "方案选择", "函数建模"] },
+    { "key": "cn-math:topic:integrated-inquiry", "label": "综合探究", "level": "micro", "parentKey": "cn-math:domain:integrated-application", "domainKey": "cn-math:domain:integrated-application", "stage": 9, "description": "综合代数、几何与数据方法展开探究", "aliases": ["综合题", "探究题", "新定义", "动点问题"] }
+  ],
+  "edges": [
+    { "sourceKey": "cn-math:topic:rational-numbers", "targetKey": "cn-math:topic:algebraic-expressions", "relationship": "prerequisite", "strength": "hard", "reason": "代数式运算依赖有理数运算和符号理解" },
+    { "sourceKey": "cn-math:topic:algebraic-expressions", "targetKey": "cn-math:topic:linear-equation", "relationship": "prerequisite", "strength": "hard", "reason": "解方程需要合并同类项和整式运算" },
+    { "sourceKey": "cn-math:topic:linear-equation", "targetKey": "cn-math:topic:inequality", "relationship": "supports", "strength": "soft", "reason": "移项与变形经验支持不等式求解" },
+    { "sourceKey": "cn-math:topic:rational-numbers", "targetKey": "cn-math:topic:real-numbers", "relationship": "prerequisite", "strength": "hard", "reason": "实数体系在有理数体系上扩展" },
+    { "sourceKey": "cn-math:topic:algebraic-expressions", "targetKey": "cn-math:topic:factorization", "relationship": "prerequisite", "strength": "hard", "reason": "因式分解是整式乘法的逆向运用" },
+    { "sourceKey": "cn-math:topic:factorization", "targetKey": "cn-math:topic:fractions", "relationship": "supports", "strength": "soft", "reason": "分式化简经常需要因式分解" },
+    { "sourceKey": "cn-math:topic:real-numbers", "targetKey": "cn-math:topic:radicals", "relationship": "prerequisite", "strength": "hard", "reason": "二次根式依赖平方根和实数概念" },
+    { "sourceKey": "cn-math:topic:linear-equation", "targetKey": "cn-math:topic:linear-function", "relationship": "supports", "strength": "soft", "reason": "方程与变量关系支持理解一次函数" },
+    { "sourceKey": "cn-math:topic:coordinate-plane", "targetKey": "cn-math:topic:linear-function", "relationship": "prerequisite", "strength": "hard", "reason": "函数图象需要坐标系表示" },
+    { "sourceKey": "cn-math:topic:factorization", "targetKey": "cn-math:topic:quadratic-equation", "relationship": "supports", "strength": "soft", "reason": "因式分解是求解一元二次方程的重要方法" },
+    { "sourceKey": "cn-math:topic:quadratic-equation", "targetKey": "cn-math:topic:quadratic-function", "relationship": "prerequisite", "strength": "hard", "reason": "二次函数与一元二次方程的零点关系紧密" },
+    { "sourceKey": "cn-math:topic:linear-function", "targetKey": "cn-math:topic:inverse-proportion", "relationship": "supports", "strength": "soft", "reason": "一次函数学习建立函数图象和性质分析方法" },
+    { "sourceKey": "cn-math:topic:linear-function", "targetKey": "cn-math:topic:quadratic-function", "relationship": "supports", "strength": "soft", "reason": "一次函数学习建立函数研究的基本范式" },
+
+    { "sourceKey": "cn-math:topic:basic-geometry", "targetKey": "cn-math:topic:parallel-lines", "relationship": "prerequisite", "strength": "hard", "reason": "相交线和平行线依赖线与角的基本概念" },
+    { "sourceKey": "cn-math:topic:parallel-lines", "targetKey": "cn-math:topic:triangles", "relationship": "supports", "strength": "soft", "reason": "三角形角关系常用平行线性质" },
+    { "sourceKey": "cn-math:topic:triangles", "targetKey": "cn-math:topic:congruence", "relationship": "prerequisite", "strength": "hard", "reason": "全等判定依赖三角形元素和基本性质" },
+    { "sourceKey": "cn-math:topic:congruence", "targetKey": "cn-math:topic:axis-symmetry", "relationship": "supports", "strength": "soft", "reason": "全等思想支持轴对称与等腰三角形证明" },
+    { "sourceKey": "cn-math:topic:triangles", "targetKey": "cn-math:topic:pythagorean", "relationship": "prerequisite", "strength": "hard", "reason": "勾股定理建立在直角三角形概念上" },
+    { "sourceKey": "cn-math:topic:congruence", "targetKey": "cn-math:topic:parallelogram", "relationship": "supports", "strength": "soft", "reason": "特殊四边形证明常需全等三角形" },
+    { "sourceKey": "cn-math:topic:congruence", "targetKey": "cn-math:topic:similarity", "relationship": "prerequisite", "strength": "hard", "reason": "相似是在全等与比例基础上的推广" },
+    { "sourceKey": "cn-math:topic:triangles", "targetKey": "cn-math:topic:circle", "relationship": "supports", "strength": "soft", "reason": "圆中角和线段关系经常转化为三角形问题" },
+    { "sourceKey": "cn-math:topic:axis-symmetry", "targetKey": "cn-math:topic:geometric-transformation", "relationship": "supports", "strength": "soft", "reason": "轴对称为继续学习旋转和中心对称提供变换经验" },
+
+    { "sourceKey": "cn-math:topic:data-collection", "targetKey": "cn-math:topic:descriptive-statistics", "relationship": "prerequisite", "strength": "hard", "reason": "数据分析建立在可靠收集与整理数据的基础上" },
+    { "sourceKey": "cn-math:topic:descriptive-statistics", "targetKey": "cn-math:topic:probability", "relationship": "supports", "strength": "soft", "reason": "频率和数据分析经验支持理解概率" },
+
+    { "sourceKey": "cn-math:topic:linear-equation", "targetKey": "cn-math:topic:equation-modeling", "relationship": "prerequisite", "strength": "hard", "reason": "方程建模需要建立并求解一元一次方程" },
+    { "sourceKey": "cn-math:topic:linear-function", "targetKey": "cn-math:topic:function-modeling", "relationship": "prerequisite", "strength": "hard", "reason": "函数建模依赖函数表达、图象和性质" },
+    { "sourceKey": "cn-math:topic:similarity", "targetKey": "cn-math:topic:integrated-inquiry", "relationship": "supports", "strength": "soft", "reason": "综合探究常整合比例与几何推理" },
+    { "sourceKey": "cn-math:topic:quadratic-function", "targetKey": "cn-math:topic:integrated-inquiry", "relationship": "supports", "strength": "soft", "reason": "九年级综合探究常涉及二次函数关系" },
+    { "sourceKey": "cn-math:topic:function-modeling", "targetKey": "cn-math:topic:integrated-inquiry", "relationship": "supports", "strength": "soft", "reason": "综合探究需要把多类关系组织为模型" }
+  ],
+  "editions": [
+    { "key": "pep", "label": "人教版", "publisher": "人民教育出版社" },
+    { "key": "bnu", "label": "北师大版", "publisher": "北京师范大学出版社" },
+    { "key": "sujiao", "label": "苏教版", "publisher": "江苏凤凰科学技术出版社" }
+  ],
+  "mappings": [
+    { "nodeKey": "cn-math:domain:number-algebra", "editionKey": "pep", "grade": 7, "volume": "全学段", "unitLabel": "数与代数主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:number-algebra", "editionKey": "bnu", "grade": 7, "volume": "全学段", "unitLabel": "数与代数主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:number-algebra", "editionKey": "sujiao", "grade": 7, "volume": "全学段", "unitLabel": "数与代数主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:geometry", "editionKey": "pep", "grade": 7, "volume": "全学段", "unitLabel": "图形与几何主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:geometry", "editionKey": "bnu", "grade": 7, "volume": "全学段", "unitLabel": "图形与几何主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:geometry", "editionKey": "sujiao", "grade": 7, "volume": "全学段", "unitLabel": "图形与几何主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:statistics-probability", "editionKey": "pep", "grade": 7, "volume": "全学段", "unitLabel": "统计与概率主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:statistics-probability", "editionKey": "bnu", "grade": 7, "volume": "全学段", "unitLabel": "统计与概率主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:statistics-probability", "editionKey": "sujiao", "grade": 7, "volume": "全学段", "unitLabel": "统计与概率主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:integrated-application", "editionKey": "pep", "grade": 7, "volume": "全学段", "unitLabel": "综合与实践主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:integrated-application", "editionKey": "bnu", "grade": 7, "volume": "全学段", "unitLabel": "综合与实践主线", "alignmentStatus": "framework" },
+    { "nodeKey": "cn-math:domain:integrated-application", "editionKey": "sujiao", "grade": 7, "volume": "全学段", "unitLabel": "综合与实践主线", "alignmentStatus": "framework" }
+  ]
+}

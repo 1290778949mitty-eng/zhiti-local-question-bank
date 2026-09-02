@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <rect width="1200" height="1600" fill="#c9c9c9"/>
+  <path d="M112 98 L1090 66 L1118 1505 L78 1530 Z" fill="white" stroke="#222" stroke-width="7"/>
+  <text x="600" y="150" text-anchor="middle" font-family="Arial,sans-serif" font-size="42" font-weight="700">初中数学作业</text>
+  <text x="150" y="250" font-family="Arial,sans-serif" font-size="32">1. 计算 2 + 3 =</text>
+  <text x="490" y="255" font-family="Comic Sans MS,cursive" font-size="48" fill="#2056a0">5</text>
+  <text x="150" y="410" font-family="Arial,sans-serif" font-size="32">2. 解方程：x + 4 = 9。</text>
+  <text x="190" y="490" font-family="Comic Sans MS,cursive" font-size="42" fill="#2056a0">x = 9 - 4 = 6</text>
+  <text x="150" y="680" font-family="Arial,sans-serif" font-size="32">3. 说明三角形内角和为何等于 180°。</text>
+  <text x="190" y="770" font-family="Comic Sans MS,cursive" font-size="38" fill="#2056a0">因为三个角加起来就是 180°。</text>
+</svg>

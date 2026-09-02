@@ -145,6 +145,9 @@ export type Question = {
   analysisDocxAssets?: Record<string, string>;
   source: string;
   tags?: string[];
+  tagsZh?: string[];
+  tagsEn?: string[];
+  taxonomyKeys?: string[];
   contentImages?: string[];
   imageLayout?: ImageLayout;
   optimizedAt?: number;
@@ -188,4 +191,270 @@ export type AuthUser = {
   email: string;
   role: "admin" | "member";
   local?: boolean;
+};
+
+export type Student = {
+  id: string;
+  name: string;
+  className: string;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type StudentSummary = Student & {
+  loginId: string;
+  wrongCount: number;
+  reviewingCount: number;
+  masteredCount: number;
+};
+
+export type WrongQuestionEntry = {
+  id: string;
+  studentId: string;
+  sourceScope: LibraryScope;
+  sourceQuestionId: string;
+  sourcePath: string;
+  question: Question;
+  mistakeCount: number;
+  note: string;
+  mastered: boolean;
+  lastWrongAt: number;
+  createdAt: number;
+  updatedAt: number;
+  sourceKind?: "library" | "assignment";
+  assignmentId?: string | null;
+  submissionId?: string | null;
+  gradingItemId?: string | null;
+  studentAnswer?: string;
+  feedback?: string;
+  answerCropAssetId?: string | null;
+};
+
+export type HomeworkClass = {
+  id: string;
+  name: string;
+  studentIds: string[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type StudentAccount = {
+  studentId: string;
+  loginId: string;
+  mustChangePassword: boolean;
+  lastLoginAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type StudentAuth = {
+  studentId: string;
+  ownerUserId: string;
+  name: string;
+  loginId: string;
+  teacherCode: string;
+  mustChangePassword: boolean;
+};
+
+export type AssignmentStatus = "draft" | "published" | "closed" | "archived";
+export type SubmissionStatus = "draft" | "submitted" | "processing" | "review_required" | "ready" | "published" | "returned" | "failed";
+export type GradingVerdict = "correct" | "partial" | "incorrect" | "unreadable" | "review_required";
+export type HomeworkAssetRole = "question" | "answer" | "submission_original" | "submission_processed" | "answer_crop";
+
+export type HomeworkAsset = {
+  id: string;
+  role: HomeworkAssetRole;
+  url: string;
+  contentType: string;
+  byteSize: number;
+  originalName: string;
+  pageOrder: number;
+  createdAt: number;
+};
+
+export type AssignmentQuestion = {
+  id: string;
+  assignmentId: string;
+  questionNumber: string;
+  pageNumber: number;
+  type: QuestionType;
+  stem: string;
+  options: string[];
+  answer: string;
+  analysis: string;
+  bbox: { x: number; y: number; width: number; height: number } | null;
+  confidence: number;
+  warnings: string[];
+  knowledgeTags: string[];
+  taxonomyKeys: string[];
+  capabilityKeys: string[];
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type Assignment = {
+  id: string;
+  title: string;
+  instructions: string;
+  status: AssignmentStatus;
+  dueAt: number | null;
+  templateConfirmed: boolean;
+  targetStudentIds: string[];
+  questions: AssignmentQuestion[];
+  assets: HomeworkAsset[];
+  submissionCounts: Record<SubmissionStatus, number>;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SubmissionPage = {
+  id: string;
+  submissionId: string;
+  pageOrder: number;
+  originalAssetId: string;
+  processedAssetId: string;
+  originalUrl: string;
+  processedUrl: string;
+  quality: { score: number; warnings: string[]; corners?: Array<{ x: number; y: number }> };
+  createdAt: number;
+};
+
+export type GradingItem = {
+  id: string;
+  submissionId: string;
+  assignmentQuestionId: string;
+  pageId: string | null;
+  questionNumber: string;
+  questionType: QuestionType;
+  stem: string;
+  standardAnswer: string;
+  standardAnalysis: string;
+  verdict: GradingVerdict;
+  studentAnswer: string;
+  feedback: string;
+  errorType: string;
+  stepAnalysis: string[];
+  evidenceSummary: string;
+  capabilityKeys: string[];
+  confidence: number;
+  bbox: { x: number; y: number; width: number; height: number } | null;
+  requiresReview: boolean;
+  reviewedAt: number | null;
+  correctedAt: number | null;
+  wrongBookAppliedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SubmissionReportPoint = {
+  title: string;
+  detail: string;
+  questionNumbers: string[];
+  capabilityKey: string | null;
+};
+
+export type SubmissionReport = {
+  overallSummary: string;
+  studentMessage: string;
+  strengths: SubmissionReportPoint[];
+  gaps: SubmissionReportPoint[];
+  actions: string[];
+  warnings: string[];
+  generatedAt: number;
+  updatedAt: number;
+};
+
+export type CapabilityDimension = "knowledge" | "skill";
+export type CapabilityStatus = "stable" | "developing" | "attention" | "insufficient";
+
+export type CapabilityNode = {
+  key: string;
+  label: string;
+  dimension: CapabilityDimension;
+  description: string;
+  level: "domain" | "topic" | "micro" | "capability";
+  parentKey?: string;
+  domainKey: string;
+  stage: number;
+  aliases?: string[];
+};
+
+export type CapabilityEdge = {
+  sourceKey: string;
+  targetKey: string;
+  relationship: "prerequisite" | "supports";
+  strength: "hard" | "soft";
+  reason: string;
+};
+
+export type TextbookEdition = {
+  key: string;
+  label: string;
+  publisher: string;
+};
+
+export type TextbookTopicMapping = {
+  nodeKey: string;
+  editionKey: string;
+  grade: number;
+  volume: string;
+  unitLabel: string;
+  alignmentStatus: "framework" | "verified";
+};
+
+export type CapabilityEvidence = {
+  id: string;
+  capabilityKey: string;
+  capabilityLabel: string;
+  dimension: CapabilityDimension;
+  verdict: Extract<GradingVerdict, "correct" | "partial" | "incorrect">;
+  confidence: number;
+  diagnosis: string;
+  assignmentId: string;
+  submissionId: string;
+  gradingItemId: string;
+  createdAt: number;
+};
+
+export type CapabilityProfileNode = CapabilityNode & {
+  status: CapabilityStatus;
+  evidenceCount: number;
+  currentEvidenceCount: number;
+  highlighted: boolean;
+  summary: string;
+  textbookMappings: Array<TextbookTopicMapping & { editionLabel: string }>;
+  recentEvidence: Array<{ questionNumber: string; verdict: CapabilityEvidence["verdict"]; diagnosis: string; assignmentId: string; createdAt: number }>;
+};
+
+export type StudentCapabilityProfile = {
+  frameworkVersion: string;
+  studentId: string;
+  assignmentId: string | null;
+  nodes: CapabilityProfileNode[];
+  edges: CapabilityEdge[];
+  textbookEditions: TextbookEdition[];
+  viewMode: "teacher" | "student";
+  updatedAt: number;
+};
+
+export type HomeworkSubmission = {
+  id: string;
+  assignmentId: string;
+  assignmentTitle: string;
+  studentId: string;
+  studentName: string;
+  version: number;
+  status: SubmissionStatus;
+  submittedByType: "teacher" | "student";
+  submittedAt: number | null;
+  publishedAt: number | null;
+  returnedAt: number | null;
+  failureReason: string;
+  pages: SubmissionPage[];
+  gradingItems: GradingItem[];
+  report: SubmissionReport | null;
+  createdAt: number;
+  updatedAt: number;
 };

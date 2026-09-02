@@ -1,4 +1,5 @@
 export type MathTextSegment = { kind: "text" | "math"; value: string; explicit?: boolean };
+export type PlainTextWebLine = { value: string; align: "left" | "center" };
 import { normalizeMathNotation } from "./math-notation.mjs";
 export { normalizeMathNotation } from "./math-notation.mjs";
 
@@ -79,6 +80,26 @@ export function splitMathText(text: string): MathTextSegment[] {
   }
   if (cursor < text.length) segments.push(...splitAutomatic(text.slice(cursor)));
   return segments.filter((segment) => segment.value.length > 0);
+}
+
+export function isStandaloneMathLine(text: string) {
+  const segments = splitMathText(text).filter((segment) => segment.value.trim().length > 0);
+  const onlyMathAndPunctuation = segments.some((segment) => segment.kind === "math")
+    && segments.every((segment) => segment.kind === "math" || /^[\s,，.。;；:：!?！？]+$/.test(segment.value));
+  if (!onlyMathAndPunctuation) return false;
+  const knownFunctions = new Set(["sin", "cos", "tan", "cot", "sec", "csc", "log", "exp", "lim", "max", "min", "gcd", "lcm"]);
+  const automaticText = segments.filter((segment) => segment.kind === "math" && !segment.explicit).map((segment) => segment.value).join(" ");
+  const proseWords = automaticText.match(/[A-Za-z]+/g) ?? [];
+  return proseWords.every((word) => knownFunctions.has(word.toLowerCase()) || !/^[A-Z][a-z]+$/.test(word) && word.length <= 3);
+}
+
+export function plainTextWebLines(text: string, options: { stripLeadingQuestionNumber?: boolean } = {}): PlainTextWebLine[] {
+  return text.split(/\r?\n/).map((rawLine, index) => {
+    const value = options.stripLeadingQuestionNumber && index === 0
+      ? rawLine.replace(/^\s*\d{1,3}[.．、]\s*/, "")
+      : rawLine;
+    return { value, align: isStandaloneMathLine(value) ? "center" : "left" };
+  });
 }
 
 export function latexFractionDepth(source: string) {

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mitty.local/schema/china-math-taxonomy.schema.json",
+  "title": "Mitty 中国课程知识图谱",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "title", "scope", "status", "nodes", "edges", "editions", "mappings"],
+  "properties": {
+    "version": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "scope": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["foundation", "verified"] },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "label", "level", "domainKey", "stage", "description", "aliases"],
+        "properties": {
+          "key": { "type": "string", "pattern": "^cn-math:" },
+          "label": { "type": "string", "minLength": 1 },
+          "level": { "enum": ["domain", "topic", "micro"] },
+          "parentKey": { "type": "string", "pattern": "^cn-math:" },
+          "domainKey": { "type": "string", "pattern": "^cn-math:domain:" },
+          "stage": { "type": "integer", "minimum": 7, "maximum": 9 },
+          "description": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceKey", "targetKey", "relationship", "strength", "reason"],
+        "properties": {
+          "sourceKey": { "type": "string", "pattern": "^cn-math:" },
+          "targetKey": { "type": "string", "pattern": "^cn-math:" },
+          "relationship": { "enum": ["prerequisite", "supports"] },
+          "strength": { "enum": ["hard", "soft"] },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "editions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "label", "publisher"],
+        "properties": {
+          "key": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "publisher": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nodeKey", "editionKey", "grade", "volume", "unitLabel", "alignmentStatus"],
+        "properties": {
+          "nodeKey": { "type": "string", "pattern": "^cn-math:" },
+          "editionKey": { "type": "string", "minLength": 1 },
+          "grade": { "type": "integer", "minimum": 7, "maximum": 9 },
+          "volume": { "type": "string", "minLength": 1 },
+          "unitLabel": { "type": "string", "minLength": 1 },
+          "alignmentStatus": { "enum": ["framework", "verified"] }
+        }
+      }
+    }
+  }
+}

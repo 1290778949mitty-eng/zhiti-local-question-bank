@@ -131,6 +131,18 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     const userOne = sessionCookie(registrationOne.response);
     const userTwo = sessionCookie(registrationTwo.response);
 
+    assert.equal((await jsonRequest(remoteBase, "/api/students")).response.status, 401);
+    const studentOne = await jsonRequest(remoteBase, "/api/students", { cookie: userOne, method: "POST", body: { student: { name: "小宇", className: "初三（2）班", notes: "函数题需要加强" } } });
+    const studentTwo = await jsonRequest(remoteBase, "/api/students", { cookie: userTwo, method: "POST", body: { student: { name: "小宇", className: "初三（1）班", notes: "另一个账户" } } });
+    assert.equal(studentOne.response.status, 201);
+    assert.equal(studentTwo.response.status, 201);
+    const studentOneId = studentOne.payload.student.id;
+    assert.notEqual(studentOneId, studentTwo.payload.student.id);
+    const updatedStudent = await jsonRequest(remoteBase, `/api/students/${studentOneId}`, { cookie: userOne, method: "PUT", body: { student: { name: "小宇", className: "初三（3）班", notes: "档案已更新" } } });
+    assert.equal(updatedStudent.payload.student.className, "初三（3）班");
+    assert.equal((await jsonRequest(remoteBase, "/api/students", { cookie: userOne })).payload.students[0].notes, "档案已更新");
+    assert.equal((await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userTwo })).response.status, 404);
+
     const emptyOne = await jsonRequest(remoteBase, "/api/library?scope=mine", { cookie: userOne });
     const emptyTwo = await jsonRequest(remoteBase, "/api/library?scope=mine", { cookie: userTwo });
     assert.deepEqual(emptyOne.payload.modules, []);
@@ -144,6 +156,22 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     const privateQuestion = await jsonRequest(remoteBase, "/api/questions", { cookie: userOne, method: "POST", body: { scope: "mine", question: question("private-question", moduleId, categoryOne.payload.category.id, "私人公式 x²+1 与表格图片题", true) } });
     assert.equal(privateQuestion.response.status, 201);
     const privateAsset = privateQuestion.payload.question.contentImages[0];
+
+    const firstWrongRecord = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne, method: "POST", body: { scope: "mine", questionIds: ["private-question"], note: "第一次漏看条件" } });
+    const repeatedWrongRecord = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne, method: "POST", body: { scope: "mine", questionIds: ["private-question"], note: "第二次仍然算错" } });
+    assert.deepEqual({ created: firstWrongRecord.payload.created, updated: firstWrongRecord.payload.updated }, { created: 1, updated: 0 });
+    assert.deepEqual({ created: repeatedWrongRecord.payload.created, updated: repeatedWrongRecord.payload.updated }, { created: 0, updated: 1 });
+    const privateWrongBook = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne });
+    assert.equal(privateWrongBook.payload.entries.length, 1);
+    assert.equal(privateWrongBook.payload.entries[0].mistakeCount, 2);
+    assert.equal(privateWrongBook.payload.entries[0].note, "第二次仍然算错");
+    assert.equal(privateWrongBook.payload.entries[0].question.stem, "私人公式 x²+1 与表格图片题");
+    const privateWrongEntryId = privateWrongBook.payload.entries[0].id;
+    assert.equal((await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions/${privateWrongEntryId}`, { cookie: userTwo, method: "PUT", body: { entry: { mastered: true } } })).response.status, 404);
+    assert.equal((await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions/${privateWrongEntryId}`, { cookie: userOne, method: "PUT", body: { entry: { mastered: true, mistakeCount: 3, note: "已完成订正" } } })).response.status, 200);
+    const updatedWrongBook = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne });
+    assert.equal(updatedWrongBook.payload.entries[0].mastered, true);
+    assert.equal(updatedWrongBook.payload.entries[0].mistakeCount, 3);
 
     const mineOne = await jsonRequest(remoteBase, "/api/library?scope=mine", { cookie: userOne });
     const mineTwo = await jsonRequest(remoteBase, "/api/library?scope=mine", { cookie: userTwo });
@@ -179,6 +207,14 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     assert.equal(guestPublicAsset.status, 200);
     assert.equal(guestPublicAsset.headers.get("cache-control"), "public, max-age=31536000, immutable");
 
+    const publicWrongRecord = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne, method: "POST", body: { scope: "public", questionIds: ["public-question"], note: "公共题错因" } });
+    assert.equal(publicWrongRecord.payload.created, 1);
+    const studentSummary = await jsonRequest(remoteBase, "/api/students", { cookie: userOne });
+    assert.equal(studentSummary.payload.students[0].wrongCount, 2);
+    assert.equal(studentSummary.payload.students[0].reviewingCount, 1);
+    assert.equal(studentSummary.payload.students[0].masteredCount, 1);
+    assert.equal((await jsonRequest(remoteBase, "/api/students", { cookie: userTwo })).payload.students[0].wrongCount, 0);
+
     const copied = await jsonRequest(remoteBase, "/api/library/copy", { cookie: userOne, method: "POST", body: { questionIds: ["public-question"], targetModuleId: moduleId, targetCategoryId: categoryOne.payload.category.id } });
     assert.equal(copied.payload.copied, 1);
     const copiedQuestion = copied.payload.questions[0];
@@ -208,9 +244,16 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     const deletionPublish = await jsonRequest(localBase, "/api/publications", { method: "POST", body: { action: "publish-local" } });
     assert.equal(deletionPublish.payload.diff.questions.deleted, 1);
     assert.equal((await jsonRequest(remoteBase, "/api/library?scope=public")).payload.questions.length, 0);
+    const wrongBookAfterSourceDeletion = await jsonRequest(remoteBase, `/api/students/${studentOneId}/wrong-questions`, { cookie: userOne });
+    assert.equal(wrongBookAfterSourceDeletion.payload.entries.length, 2);
+    assert.equal(wrongBookAfterSourceDeletion.payload.entries.find((entry) => entry.sourceScope === "public").question.stem, "公共公式 x²+1 与表格图片题");
+    assert.equal((await fetch(`${remoteBase}${publicAsset}`, { headers: { Cookie: userOne } })).status, 200);
     const privateAfterDeletion = await jsonRequest(remoteBase, "/api/library?scope=mine", { cookie: userOne });
     assert.equal(privateAfterDeletion.payload.questions.find((item) => item.id === copiedQuestion.id).stem, "私人副本已修改");
     assert.equal((await fetch(`${remoteBase}${copiedQuestion.contentImages[0]}`, { headers: { Cookie: userOne } })).status, 200);
+    const removedStudent = await jsonRequest(remoteBase, `/api/students/${studentOneId}`, { cookie: userOne, method: "DELETE", body: {} });
+    assert.equal(removedStudent.payload.wrongQuestionCount, 2);
+    assert.equal((await jsonRequest(remoteBase, "/api/students", { cookie: userOne })).payload.students.length, 0);
   } finally {
     if (local) await stopWorker(local);
     await stopWorker(remote);

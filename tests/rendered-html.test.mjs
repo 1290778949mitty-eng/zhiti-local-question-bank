@@ -10,6 +10,7 @@ import { fractionSizeClass, latexFractionDepth, splitMathText, toLatexMath, toRe
 import { needsWordMathEquation, normalizeMathNotation } from "../lib/math-notation.mjs";
 import { orthogonalizeCoordinatePlan, printReadyInkColor, regularizeQuadraticFunctionPlan, svgFromVectorDiagramPlan, vectorDiagramAspectRatio } from "../lib/vector-diagram-renderer.ts";
 import { enlargeNestedWordMath, ensureWordMathSettings, wordMathFractionDepth } from "../lib/word-math-sizing.mjs";
+import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -56,7 +57,9 @@ test("keeps every privileged operation behind server-side authentication", async
   const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
   const downloadRoute = await readFile(new URL("../app/api/download/route.ts", import.meta.url), "utf8");
 
-  assert.match(page, /访客 · 仅浏览/);
+  assert.equal(ALEVEL_PAGE_COPY.zh.guestBrowse, "访客 · 仅浏览");
+  assert.equal(ALEVEL_PAGE_COPY.en.guestBrowse, "Guest · Browse only");
+  assert.match(page, /pageCopy\.guestBrowse/);
   assert.match(auth, /HttpOnly; Secure; SameSite=Lax/);
   assert.match(auth, /PBKDF2/);
   assert.match(questionRoute, /await requireUser\(request\)/);

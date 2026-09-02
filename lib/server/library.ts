@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question } from "../../lib/types";
 import { retainedQuestionCreatedAt } from "../../lib/question-order-rules.mjs";
 import { normalizeQuestionProvenance } from "../../lib/exam-modules.mjs";
+import { resolveKnowledgeTaxonomyKeys } from "../../lib/homework-capability-framework.mjs";
 
 type AppEnv = { DB: D1Database };
 
@@ -65,6 +66,18 @@ function assetIds(value: unknown) {
   return [...result];
 }
 
+function normalizedQuestionTags(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = []; const seen = new Set<string>();
+  for (const item of value) {
+    const tag = String(item ?? "").trim().slice(0, 120); const key = tag.toLocaleLowerCase("en");
+    if (!tag || seen.has(key)) continue;
+    seen.add(key); result.push(tag);
+    if (result.length === 30) break;
+  }
+  return result;
+}
+
 function accessKey(libraryId: string, publicationId: string | null, assetId: string) {
   return `${libraryId}|${publicationId ?? "personal"}|${assetId}`;
 }
@@ -73,6 +86,11 @@ async function grantAssetAccess(assetId: string, context: Pick<LibraryContext, "
   await appEnv().DB.prepare(`INSERT OR IGNORE INTO asset_library_access
     (access_key, asset_id, library_id, publication_id, created_at) VALUES (?, ?, ?, ?, ?)`)
     .bind(accessKey(context.libraryId, context.publicationId, assetId), assetId, context.libraryId, context.publicationId, Date.now()).run();
+}
+
+export async function retainQuestionAssetsForUser(question: Question, user: AuthUser) {
+  const context = await resolveLibraryContext(user, "mine");
+  for (const id of assetIds(question)) await grantAssetAccess(id, context);
 }
 
 async function ensureLegacyAssetAccess() {
@@ -234,6 +252,11 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
   delete sanitized.canEdit;
   delete sanitized.createdByEmail;
   delete sanitized.createdBy;
+  sanitized.tags = normalizedQuestionTags(raw.tags);
+  if (Array.isArray(raw.tagsZh)) sanitized.tagsZh = normalizedQuestionTags(raw.tagsZh);
+  else delete sanitized.tagsZh;
+  if (Array.isArray(raw.tagsEn)) sanitized.tagsEn = normalizedQuestionTags(raw.tagsEn);
+  else delete sanitized.tagsEn;
   const mediaSafe = await uploadMediaValue(sanitized, context) as Question;
   return {
     ...mediaSafe,
@@ -243,6 +266,7 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
     categoryId: String(raw.categoryId ?? raw.moduleId ?? ""),
     provenance: normalizeQuestionProvenance(raw.provenance),
     examYear: String(raw.examYear ?? "").trim().slice(0, 40),
+    taxonomyKeys: resolveKnowledgeTaxonomyKeys(sanitized.tagsZh?.length ? sanitized.tagsZh : sanitized.tags ?? [], raw.stem),
     createdAt: existing?.createdAt ?? retainedQuestionCreatedAt(raw.createdAt, now),
     updatedAt: now,
     createdBy: existing?.createdBy ?? user.id,

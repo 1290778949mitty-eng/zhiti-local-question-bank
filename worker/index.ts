@@ -42,6 +42,10 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
+  async queue(batch: QueueBatch): Promise<void> {
+    const { processHomeworkQueue } = await import("../lib/server/homework-grading");
+    await processHomeworkQueue(batch);
+  },
 };
 
 export default worker;

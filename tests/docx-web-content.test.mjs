@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } from "../lib/docx-web-content.ts";
-import { toLatexMath } from "../lib/math-text.ts";
+import { plainTextWebLines, toLatexMath } from "../lib/math-text.ts";
 
 const paragraph = (body) => `<w:p xmlns:w="word" xmlns:m="math"><w:pPr><w:jc w:val="left"/></w:pPr>${body}</w:p>`;
 const textRun = (value, properties = "") => `<w:r><w:rPr>${properties}</w:rPr><w:t xml:space="preserve">${value}</w:t></w:r>`;
@@ -73,4 +73,29 @@ test("keeps analysis paragraphs separate and leaves plain text questions on thei
   assert.equal(docxWebContentText(analysis), "【分析】先读题．\n【解答】$\\frac{1}{2}$");
   assert.deepEqual(parseDocxWebContent([]), { blocks: [] });
   assert.deepEqual(parseDocxWebOptions([]), []);
+});
+
+test("keeps English prose and standalone formulas on separate web lines", () => {
+  const stem = "The equation\nx²＋kx＋3＝0\nhas no real roots.\nShow that\nk²＜12";
+  const lines = plainTextWebLines(stem);
+  assert.deepEqual(lines, [
+    { value: "The equation", align: "left" },
+    { value: "x²＋kx＋3＝0", align: "center" },
+    { value: "has no real roots.", align: "left" },
+    { value: "Show that", align: "left" },
+    { value: "k²＜12", align: "center" },
+  ]);
+  assert.equal(lines.map((line) => line.value).join("\n"), stem);
+});
+
+test("centers only formula-only fallback lines and keeps prose controls left aligned", () => {
+  assert.deepEqual(plainTextWebLines("12. Let x＝1.\ny＝2", { stripLeadingQuestionNumber: true }), [
+    { value: "Let x＝1.", align: "left" },
+    { value: "y＝2", align: "center" },
+  ]);
+  assert.deepEqual(plainTextWebLines("普通文字\n\n继续说明"), [
+    { value: "普通文字", align: "left" },
+    { value: "", align: "left" },
+    { value: "继续说明", align: "left" },
+  ]);
 });
