@@ -2,6 +2,7 @@ import { ImportedXmlComponent, TextRun, type ParagraphChild } from 'docx';
 import { splitMathText } from './answer-studio-math-text';
 import { needsWordMathEquation } from './math-notation.mjs';
 import { mathOmml } from './math-omml';
+import { xmlSafeText } from './xml-text';
 const BODY_SIZE=21;
 const BODY_FONT={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman',hint:'eastAsia'} as const;
 type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean};
@@ -18,11 +19,19 @@ class NativeMathXml extends ImportedXmlComponent {
   }
 }
 function textRuns(text:string,style:RunStyle={}) {
-  return text.split(/([A-Za-z]+)/g).filter(Boolean).map(piece=>new TextRun({text:piece,size:BODY_SIZE,bold:style.bold,color:style.color,
+  return xmlSafeText(text).split(/([A-Za-z]+)/g).filter(Boolean).map(piece=>new TextRun({text:piece,size:BODY_SIZE,bold:style.bold,color:style.color,
     underline:style.underline?{}:undefined,italics:style.italicMath!==false&&(/^[A-Z]{1,4}$/.test(piece)||/^[a-z]$/.test(piece)),font:BODY_FONT}));
 }
-export function richText(text:string,style:RunStyle={}):ParagraphChild[] {
-  return splitMathText(text).flatMap(segment=>segment.kind==='math'&&needsWordMathEquation(segment.value,segment.explicit)
-    ? [NativeMathXml.equation(segment.value.trim(),style)]
-    : textRuns(segment.value,style));
+export function richText(text:string,style:RunStyle={},onMathError?:(error:unknown)=>void):ParagraphChild[] {
+  return splitMathText(text).flatMap(segment=>{
+    if(segment.kind!=='math'||!needsWordMathEquation(segment.value,segment.explicit))return textRuns(segment.value,style);
+    try{return [NativeMathXml.equation(segment.value.trim(),style)];}
+    catch(error){
+      if(!onMathError)throw error;
+      onMathError(error);
+      // Isolate a failure to this equation, not all the other equations or
+      // prose in its paragraph. Keep the unrecognized source for correction.
+      return textRuns(`〔公式待核对：${segment.value}〕`,style);
+    }
+  });
 }

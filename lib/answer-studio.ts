@@ -32,7 +32,7 @@ export type StudioAnswerPlacement = { kind: "choice" | "blank"; placeholder: str
 export type StudioTable = { rows: string[][]; warnings: string[]; red?: boolean };
 export type StudioDraft = { version: 1; inputMode?: "paired" | "answers"; title: string; pages: StudioPage[]; questions: StudioQuestion[]; answers: StudioRecord[]; updatedAt: number };
 export const emptyStudioDraft = (): StudioDraft => ({ version: 1, title: "答案整理", pages: [], questions: [], answers: [], updatedAt: Date.now() });
-export function hasStudioControlCharacters(s:string) {return Array.from(s).some(c=>{const n=c.charCodeAt(0);return n<32 && ![9,10,13].includes(n);}) || s.includes("\triangle") || s.includes("\frac");}
+export function hasStudioControlCharacters(s:string) {return Array.from(s).some(c=>{const n=c.charCodeAt(0);return n<32 && ![9,10,13].includes(n);});}
 export const studioKey = (q: Pick<StudioRecord, "lesson" | "section" | "number">) => [q.lesson, q.section, q.number].map(v => v.replace(/\s/g, "")).join("|");
 export const stemFingerprint = (s: string) => s.replace(/\\underline\{(?:\\quad|\s)*\}|_{2,}/g, "").replace(/\\(?:text|mathrm|mathit|textrm)\{([^{}]*)\}/g,"$1").replace(/[\s$\\{}，。．；：、,.·:;（）()＝=]/g, "");
 export function sameStudioStem(a: string, b: string) {

@@ -1,0 +1,154 @@
+{
+  "source": "User supplied S9 winter steps DOCX, reported paragraph indices are zero-based. OMML recovered structurally; no suggested mathematical corrections applied.",
+  "samples": [
+    {
+      "index": 228,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 237,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 277,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 288,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 336,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 346,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 372,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 404,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 411,
+      "text": "$\\vdots$"
+    },
+    {
+      "index": 440,
+      "text": "[0^\\circ, 45^\\circ] \\cup [135^\\circ, 180^\\circ)"
+    },
+    {
+      "index": 443,
+      "text": "(3)\t$[0^\\circ, 45^\\circ] \\cup [135^\\circ, 180^\\circ)$"
+    },
+    {
+      "index": 531,
+      "text": "$\\Leftrightarrow \\frac{1}{a} + \\frac{3}{b} = 1$ 的正整数解"
+    },
+    {
+      "index": 752,
+      "text": "$\\uparrow$ 故$P(3, 2)$"
+    },
+    {
+      "index": 1043,
+      "text": "$=12-4m+2n",
+      "recoveryNote": "Lone w:t dollar + following native equation: retained the lone source dollar, not the synthetic math delimiters from OOXML extraction."
+    },
+    {
+      "index": 1057,
+      "text": "$\\Rightarrow E(-\\frac{2\\text{√}{5}}{5}, \\frac{4\\text{√}{5}}{5})$"
+    },
+    {
+      "index": 1058,
+      "text": "$\\Rightarrow F(\\frac{11\\text{√}{5}}{5}, \\frac{3\\text{√}{5}}{5})$"
+    },
+    {
+      "index": 1059,
+      "text": "$\\Rightarrow OF = \\text{√}{26}$"
+    },
+    {
+      "index": 1061,
+      "text": "$\\Rightarrow F(3\\text{√}{5}-n, \\text{√}{5}+m)$"
+    },
+    {
+      "index": 1062,
+      "text": "令 $F(x, y)$ 则 $\\begin{cases} x = 3\\text{√}{5} - n \\\\ y = \\text{√}{5} + m \\end{cases} \\Rightarrow \\begin{cases} m = y - \\text{√}{5} \\\\ n = 3\\text{√}{5} - x \\end{cases}$"
+    },
+    {
+      "index": 1063,
+      "text": "$\\Rightarrow (y - \\text{√}{5})^2 + (3\\text{√}{5} - x)^2 = 4$"
+    },
+    {
+      "index": 1064,
+      "text": "$\\Rightarrow F$的轨迹是以$P(3\\text{√}{5}, \\text{√}{5})$为圆心，半径为$2$的圆的一部分"
+    },
+    {
+      "index": 1065,
+      "text": "故 $OF \\ge OP - 2 = 5\\text{√}{2} - 2$"
+    },
+    {
+      "index": 1086,
+      "text": "$∵□ABCD$，$O$为$AC$中点  连接$CN$"
+    },
+    {
+      "index": 1094,
+      "text": "$∴□BNCG⇒CG=BN$"
+    },
+    {
+      "index": 1107,
+      "text": "解：由射影定理，$AO\boldsymbol\\times CO=B{O}^{2}\boldsymbol\\times CO=\\frac{16}{3}⇒C\\left(0,-\\frac{16}{3}\\right)$"
+    },
+    {
+      "index": 1126,
+      "text": "解：$f'(2) = \\lim_{\\Delta x \\to 0} \\frac{f(2+\\Delta x) - f(2)}{\\Delta x} = \\lim_{\\Delta x \\to 0} \\frac{(2+\\Delta x)^2 - 7(2+\\Delta x) + 15 - (4 - 14 + 15)}{\\Delta x}$"
+    },
+    {
+      "index": 1127,
+      "text": "$= \\lim_{\\Delta x \\to 0} \\frac{(\\Delta x)^2 - 3\\Delta x}{\\Delta x} = \\lim_{\\Delta x \\to 0} (\\Delta x - 3) = -3$"
+    },
+    {
+      "index": 1128,
+      "text": "$f'(6) = \\lim_{\\Delta x \\to 0} \\frac{f(6+\\Delta x) - f(6)}{\\Delta x} = \\lim_{\\Delta x \\to 0} \\frac{(6+\\Delta x)^2 - 7x - (36 - 42)}{\\Delta x} = \\lim_{\\Delta x \\to 0} \\frac{(\\Delta x)^2 + 5\\Delta x}{\\Delta x} = \\lim_{\\Delta x \\to 0} (\\Delta x + 5)$"
+    },
+    {
+      "index": 1140,
+      "text": "(3)\t$y' = \\pi \\cdot \\cos(\\pi x + \\varphi)$"
+    },
+    {
+      "index": 1151,
+      "text": "$\\because x \\in (0, 90^\\circ)$, $\\cos x < 1$"
+    },
+    {
+      "index": 1244,
+      "text": "解：$\\because x \\in (0, 1]$"
+    },
+    {
+      "index": 1246,
+      "text": "$\\therefore a' = -(1 - \\frac{2}{x^2}) > 0$，$x \\in (0, 1]$"
+    },
+    {
+      "index": 1247,
+      "text": "$\\therefore a = -(x + \\frac{2}{x})$在$(0, 1]$上递增"
+    },
+    {
+      "index": 1248,
+      "text": "$\\therefore a = -(x + \\frac{2}{x}) \\in (-\\infty, -3]$"
+    },
+    {
+      "index": 1266,
+      "text": "$\\therefore m \\in (-\\infty, -3] \\cup [0, +\\infty)$"
+    },
+    {
+      "index": 1301,
+      "text": "$(-\\infty, -4] \\cup (0, +\\infty)$"
+    },
+    {
+      "index": 1304,
+      "text": "(2)\t$(-\\infty, -4] \\cup (0, +\\infty)$"
+    }
+  ]
+}

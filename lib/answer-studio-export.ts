@@ -7,6 +7,7 @@ import { ensureWordMathSettings, enlargeNestedWordMath } from "./word-math-sizin
 import { splitMathText } from "./answer-studio-math-text";
 import { mathOmml } from './math-omml';
 import { normalizeStudioTextFields } from './answer-studio-normalize';
+import { xmlSafeText } from './xml-text';
 import { placeStudioAnswers } from './answer-studio-layout';
 import { studioFiguresReady, studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, type StudioOutputMode } from './answer-studio-output';
 
@@ -34,6 +35,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   const bestEffort=!!options.bestEffort;
   const issueMap=new Map<string,string[]>(),globalIssues:string[]=[];
   const addIssue=(q:StudioQuestion,message:string)=>{const list=issueMap.get(q.id)||[];list.push(message);issueMap.set(q.id,list);};
+  if(xmlSafeText(draft.title)!==draft.title)globalIssues.push('资料名称含不可显示字符，已用替代符标记');
   const withStem=mode==='full'||mode==='text',withFigures=mode==='full'||mode==='answers';
   const withQuestionFigures=mode==='full'&&studioIncludesQuestionFigures(draft);
   if(withStem&&draft.questions.some(q=>!q.stem.trim())&&!bestEffort&&!options.transcription)throw new Error('缺少原题文字，请补充材料或选择仅解题步骤版');
@@ -48,6 +50,8 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   }
   if(!draft.questions.length)throw new Error('没有可导出的题目');
   draft.questions.forEach(q=>{
+    const metadata=[q.lesson,q.section,q.number,...q.warnings,...q.diagrams.flatMap(d=>[d.caption,...d.warnings,...d.shapes.map(s=>s.text)])];
+    if(metadata.some(text=>xmlSafeText(text)!==text))addIssue(q,'标题、提示或图形标签含不可显示字符，已用替代符标记');
     const fields:[string,string][]=[['解析',q.analysis],...(withStem?[['题干',q.stem] as [string,string]]:[]),...(q.answerPlacements||[]).map(p=>['短答案',p.answer] as [string,string])];
     if(withFigures)fields.push(...q.diagrams.map(d=>['图注',d.caption] as [string,string]));
     if(mode!=='steps')fields.push(...(q.tables||[]).flatMap((table,tableIndex)=>table.rows.flatMap((row,rowIndex)=>row.map((cell,cellIndex)=>[`表格${tableIndex+1}第${rowIndex+1}行第${cellIndex+1}列`,cell] as [string,string]))));
@@ -62,12 +66,10 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   const children: Array<Paragraph|Table> = [new Paragraph({ style:"Title", alignment:AlignmentType.CENTER, children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,bold:true,size:32,color:"000000"})],spacing:{after:300} })];
   if(options.reviewCopy)children.push(new Paragraph({children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000'})]}));
   const safeRichText=(text:string,style:{color?:string;underline?:boolean;italicMath?:boolean},q:StudioQuestion,field:string):ParagraphChild[]=>{
-    try{return richText(text,style);}catch(error){
+    if(xmlSafeText(text)!==text)addIssue(q,`${field}：含不可显示字符，已用替代符标记`);
+    return richText(text,style,error=>{
       const detail=error instanceof Error?error.message:'公式转换失败';addIssue(q,`${field}：${detail}`);
-      // eslint-disable-next-line no-control-regex -- Make malformed OCR safe for Word XML while preserving a visible replacement marker.
-      const literal=text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'�');
-      return [new TextRun({text:literal,size:21,color:style.color,font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman'},underline:style.underline?{}:undefined})];
-    }
+    });
   };
   const paragraph = (text: string, red: boolean, keepNext=false,q?:StudioQuestion,field='文本') => new Paragraph({ keepNext, style:red?'StudioAnswer':'Normal', spacing:{line:360,after:80}, children:q?safeRichText(text,{ color:red?'C00000':'000000' },q,field):richText(text,{ color:red?'C00000':'000000' }) });
   // Warnings are evidence about recognition, not mathematical content to be
@@ -77,6 +79,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // full export. Preserve warning text literally so the original evidence is
   // still visible and editable in Word.
   const warningParagraph = (text:string) => new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:[new TextRun({text,color:'C00000',size:22,font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman'}})]});
+  if(globalIssues.length)children.push(warningParagraph('格式问题：'+[...new Set(globalIssues)].join('；')));
   const studioTable = (table:{rows:string[][];red?:boolean},q:StudioQuestion,tableIndex:number) => {
     const columns=Math.max(...table.rows.map(row=>row.length));
     const width=Math.max(1,Math.floor(9300/columns));
@@ -123,10 +126,11 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if (d.caption) children.push(paragraph(d.caption,true,true,q,'图注'));
       children.push(new Paragraph({children:[new TextRun(token)]}));
     });
-    if(options.transcription&&mode!=='steps'){
+    if(options.transcription){
       const textWarnings=q.warnings.filter(w=>withFigures||!['尚未检查解答图与辅助线','仅答案材料：请确认未补写原件没有的步骤'].includes(w));
       const warnings=[...new Set([...textWarnings,...(withFigures?q.diagrams.flatMap(d=>d.warnings):[]),...(withStem?placed.warnings:[])])];
-      if(warnings.length)children.push(warningParagraph('转录提示：'+warnings.join('；')));
+      const displayedWarnings=mode==='steps'?warnings.filter(w=>w.startsWith('几何符号 □')||w.includes('异常控制字符')):warnings;
+      if(displayedWarnings.length)children.push(warningParagraph('转录提示：'+displayedWarnings.join('；')));
       const issues=[...new Set(issueMap.get(q.id)||[])];
       if(issues.length)children.push(warningParagraph('格式问题：'+issues.join('；')));
     }
@@ -167,6 +171,12 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // lines aligned with the proof instead of inheriting the exam export's center.
   const mathSettings=ensureWordMathSettings(await zip.file("word/settings.xml")!.async("string"));
   zip.file("word/settings.xml",mathSettings.replace(/<m:defJc\b[^>]*\/>/,'<m:defJc m:val="left"/>'));
+  // All output paths (plain text, metadata, native equations and VML labels)
+  // must produce XML 1.0 even when unrecognized OCR is retained as evidence.
+  for(const file of Object.values(zip.files))if(!file.dir&&/\.(xml|rels)$/.test(file.name)){
+    const content=await file.async('string');const safe=xmlSafeText(content);
+    if(safe!==content)zip.file(file.name,safe);
+  }
   return zip.generateAsync({type:"blob",mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
 }
 export function downloadStudioBlob(blob: Blob, name: string) {

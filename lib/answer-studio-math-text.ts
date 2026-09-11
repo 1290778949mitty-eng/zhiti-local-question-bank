@@ -77,12 +77,12 @@ function splitAutomatic(text: string): MathTextSegment[] {
 
 export function splitMathText(text: string): MathTextSegment[] {
   const segments: MathTextSegment[] = [];
-  const explicitMath = /\$\$([\s\S]+?)\$\$|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
+  const explicitMath = /(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^$]+?)\$|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\]/g;
   let cursor = 0;
   for (const match of text.matchAll(explicitMath)) {
     const start = match.index ?? 0;
     if (start > cursor) segments.push(...splitAutomatic(text.slice(cursor, start)));
-    segments.push({ kind: "math", value: match[1] ?? match[2] ?? match[3] ?? "", explicit: true });
+    segments.push({ kind: "math", value: match[1] ?? match[2] ?? match[3] ?? match[4] ?? "", explicit: true });
     cursor = start + match[0].length;
   }
   if (cursor < text.length) segments.push(...splitAutomatic(text.slice(cursor)));

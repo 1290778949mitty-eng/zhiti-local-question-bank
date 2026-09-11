@@ -1,11 +1,14 @@
 import { normalizeMathNotation } from './math-notation.mjs';
+import { xmlSafeText } from './xml-text';
 
 const escape = (s:string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 const symbols:Record<string,string> = {
   times:'×',div:'÷',cdot:'·',pm:'±',mp:'∓',le:'≤',leq:'≤',leqslant:'≤',ge:'≥',geq:'≥',geqslant:'≥',
   ne:'≠',neq:'≠',approx:'≈',angle:'∠',triangle:'△',pi:'π',Delta:'Δ',delta:'δ',alpha:'α',beta:'β',gamma:'γ',theta:'θ',
   infty:'∞',therefore:'∴',because:'∵',circ:'°',sim:'∽',backsim:'∽',cong:'≌',perp:'⊥',bot:'⊥',parallel:'∥',
-  cdots:'⋯',ldots:'…',quad:'　',qquad:'　　',odot:'⊙',bigodot:'⨀',equiv:'≡',square:'□',Rightarrow:'⇒',rightarrow:'→',
+  cdots:'⋯',ldots:'…',vdots:'⋮',dots:'⋯',quad:'　',qquad:'　　',odot:'⊙',bigodot:'⨀',equiv:'≡',cup:'∪',
+  Leftrightarrow:'⇔',Rightarrow:'⇒',rightarrow:'→',uparrow:'↑',downarrow:'↓',Uparrow:'⇑',Downarrow:'⇓',
+  square:'□',parallelogram:'▱',phi:'ϕ',varphi:'φ',in:'∈',notin:'∉',cap:'∩',to:'→',
 };
 const functions = new Set(['sin','cos','tan','cot','sec','csc','log','ln','exp','min','max']);
 const superscripts:Record<string,string> = {'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9','⁺':'+','⁻':'−'};
@@ -16,6 +19,7 @@ const delimiter = (body:string,begin:string,end:string) => wrap('d',`<m:dPr><m:b
 
 /** Strict native OMML: unsupported notation fails instead of leaking command names. */
 export function mathOmml(source:string):string {
+  if(xmlSafeText(source)!==source)throw new Error('公式含异常控制字符，请对照原件校正');
   const text:string=normalizeMathNotation(source).replace(/\*\*/g,'^').replace(/（/g,'(').replace(/）/g,')').replace(/＝/g,'=').replace(/＋/g,'+').replace(/－/g,'−').replace(/＜/g,'<').replace(/＞/g,'>');
   let i=0;
   const skip=()=>{while(i<text.length&&/\s/.test(text[i]))i++;};
@@ -36,9 +40,21 @@ export function mathOmml(source:string):string {
     if(['left','right'].includes(name)){if(text[i]==='.')i++;return '';}
     if([',',';',':',' ','!'].includes(name))return name==='!'?'':run(' ');
     if(['{','}','%','#','&','_','$','\\'].includes(name))return run(name,style);
-    if(['text','mathrm','textrm','operatorname'].includes(name))return group('p');
+    if(['text','textrm'].includes(name))return run(rawGroup(),'p');
+    if(['mathrm','operatorname'].includes(name))return group('p');
     if(name==='mathit')return group('i');
     if(name==='mathbf')return group('b');
+    if(name==='boldsymbol'){
+      // OCR may drop the braces from a one-token bold vector command. Keep
+      // that token bold and editable instead of leaking "boldsymbol" text.
+      skip();
+      return text[i]==='{'?group('b'):text[i]==='\\'?command('b'):atom('b');
+    }
+    if(name==='lim'){
+      skip();const base=run('lim','p');
+      if(text[i]!=='_')return base;
+      i++;return wrap('limLow',wrap('e',base)+wrap('lim',group(style)));
+    }
     // Preserve invisible alignment content as native Word math, including its
     // dimensions. Dropping the command would expose hidden repeated symbols.
     if(['phantom','hphantom','vphantom'].includes(name)) {
@@ -81,14 +97,18 @@ export function mathOmml(source:string):string {
     const c=text[i];
     if(c==='\\')return command(style);
     if(c==='{'){i++;return sequence('}',style);}
-    if(c==='('){i++;return delimiter(sequence(')',style),'(',')');}
+    if(c==='('||c==='['){
+      i++;let closing=c==='('?')':']';
+      const body=sequence(')]',style,end=>{closing=end;});
+      return delimiter(body,c,closing);
+    }
     if(c==='√'){i++;return wrap('rad','<m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/>'+wrap('e',group(style)));}
     i++;return run(c,style);
   }
-  function sequence(end?:string,style?:Style):string {
+  function sequence(end?:string,style?:Style,onClose?:(end:string)=>void):string {
     const result:string[]=[];
     while(i<text.length){
-      const c=text[i];if(end&&c===end){i++;return result.join('');}
+      const c=text[i];if(end&&end.includes(c)){onClose?.(c);i++;return result.join('');}
       if(c==='}')throw new Error('公式出现多余的右花括号');
       if(c==='^'||c==='_'){
         i++;if(!result.length)throw new Error('公式上下标缺少底数');

@@ -158,7 +158,8 @@ export function authBindings() {
 
 export function inviteMatches(candidate: string) {
   const expected = appEnv().REGISTRATION_INVITE_CODE ?? "";
-  return Boolean(expected) && constantTimeEqual(candidate.trim(), expected);
+  return expected.split(",").map((code) => code.trim()).filter(Boolean)
+    .reduce((matched, code) => constantTimeEqual(candidate.trim(), code) || matched, false);
 }
 
 export function roleForEmail(email: string): "admin" | "member" {

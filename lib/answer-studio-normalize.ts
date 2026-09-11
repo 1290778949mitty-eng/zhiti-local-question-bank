@@ -4,7 +4,15 @@ import { hasStudioControlCharacters, type StudioAnswerPlacement, type StudioTabl
 // backslash. Repair only unambiguous command suffixes inside explicit math;
 // never reinterpret ordinary prose whitespace or guess mathematical content.
 export function normalizeStudioMathEscapes(text: string) {
-  return text.replace(/\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\([\s\S]*?\\\)/g, math => {
+  // Backspace is illegal in XML. Its known TeX suffixes are unambiguous
+  // even without dollar delimiters. Do not reinterpret prose tabs/newlines.
+  // eslint-disable-next-line no-control-regex -- JSON-decoded TeX commands
+  text=text.replace(/\\*\x08(oldsymbol|ecause|eta|egin|ot|igodot)\b/g, '\\b$1');
+  // Repair only a whole formula line with a missing closing delimiter. A
+  // currency value or an arbitrary unmatched dollar in prose is not math.
+  text=text.replace(/^(\s*)\$([^$\r\n]+)$/gm,(line,space,body)=>
+    /[=^_]|\\[A-Za-z]+/.test(body)&&!/[\u3400-\u9fff]/.test(body)?`${space}$${body}$`:line);
+  return text.replace(/\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, math => {
     const repaired=math
     .replace(/\\*nequiv\b/g, '\\parallel')
     .replace(/\\*\triangle\b/g, '\\triangle')
@@ -68,6 +76,6 @@ export function normalizeStudioTextFields<T extends {stem:string;analysis:string
     : [];
   const controlWarning='识别结果含异常控制字符，请对照原件修复公式';
   const warnings=[...new Set([...record.warnings,...placement.warnings])].filter(w=>w!==controlWarning);
-  if([stem,analysis,...(answerPlacements||[]).map(p=>p.answer)].some(hasStudioControlCharacters))warnings.push(controlWarning);
-  return {...record,stem,analysis,answerPlacements,tables,warnings};
+  if([stem,analysis,...answerPlacements.flatMap(p=>[p.placeholder,p.answer]),...tables.flatMap(t=>t.rows.flat())].some(hasStudioControlCharacters))warnings.push(controlWarning);
+  return {...record,stem,analysis,answerPlacements,tables,warnings:[...new Set(warnings)]};
 }

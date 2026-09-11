@@ -68,11 +68,15 @@
 
 ## 自动回归
 
+### S9 寒创新乱码样本回归
+
+用户提供的《03【S9寒】创新(1)_仅解题步骤版.docx》及其 37 处异常报告已加入 `tests/fixtures/answer-studio-s9-math.json`。回归覆盖报告指出的省略号、区间并集、极限、集合、箭头、根式、控制字符、单独美元符号和平行四边形方块等形态：可确定的数学命令输出为原生 OMML；非法 XML 控制字符不进入 DOCX；紧跟四个大写点名的 `□` 自动转换为可编辑的 `▱`，其他方框符号才保留原文。对 37 处样本实际生成的仅解题步骤 Word 进行了 ZIP 结构检查和 LibreOffice 逐页 PNG 渲染（5 页），确认无控制字符、无 LaTeX 命令泄漏，47 个公式对象可编辑。该回归页面在隔离本地端口 3037 通过真实浏览器导入同一 DOCX、显示 37 处公式并点击下载完成；未调用 AI、未写入账号题库。
+
 `tests/answer-studio-output.test.mjs`、`tests/answer-studio-pipeline.test.mjs`、`tests/answer-studio-placements.test.mjs` 和 `tests/math-omml.test.mjs` 增加公式、填空和表格回归，覆盖两种输入、零配图调用、按需继续、两版文字同步、缺失题干、旧范围缓存、非选择题纯原题图省略、不确定图形报错、页面边界裁切、`overgroup`/`bigodot` 原生 OMML、重复转义幂等修复、转录提示中的未分隔 LaTeX、复合公式横线回填、二维表格及表格单元格公式；测试检查真实 DOCX ZIP 结构而非源码字符串。
 
-专项测试：6/6 通过。Lint：0 错误、17 条既有警告。`git diff --check` 通过。
+专项测试：S9 37 处样本及既有答案整理专项通过。Lint：0 错误、17 条既有警告。`git diff --check` 通过。
 
-完整测试在并行运行时曾出现历史账号隔离测试 `GET /api/students` 超时；近期完整回归受到用户正在运行的 3017 实例高负载影响，专项及其余历史测试通过，未修改超时来绕过。最近一次稳定完整串行回归为 131/131（包含构建、公式、填空、表格和尽力导出测试）。`npm run lint` 0 错误、17 条既有警告；`git diff --check` 通过。
+完整测试在并行运行时曾出现历史账号隔离测试 `GET /api/students` 超时；近期完整回归受到用户正在运行的 3017 实例高负载影响，专项及其余历史测试通过，未修改超时来绕过。最近一次稳定完整串行回归为 134/134（包含构建、公式、填空、表格、尽力导出和 S9 37 处样本测试）。`npm run lint` 0 错误、17 条既有警告；`git diff --check` 通过。
 
 测试日志：`/tmp/studio-output-final-tests.log`、`/tmp/studio-output-final-tests-rerun.log`、`/tmp/studio-output-final-lint.log`。既有 TypeScript 全库检查错误保留，没有宣称全库 tsc 通过。
 

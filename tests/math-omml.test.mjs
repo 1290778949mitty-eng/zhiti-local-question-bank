@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
+import fs from 'node:fs/promises';
 const compiled=await build({entryPoints:['lib/math-omml.ts'],bundle:true,write:false,format:'esm',platform:'node'});
 const {mathOmml}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
 const splitBuild=await build({entryPoints:['lib/answer-studio-math-text.ts'],bundle:true,write:false,format:'esm',platform:'node'});
 const {splitMathText}=await import('data:text/javascript;base64,'+Buffer.from(splitBuild.outputFiles[0].text).toString('base64'));
+const normalizeBuild=await build({entryPoints:['lib/answer-studio-normalize.ts'],bundle:true,write:false,format:'esm',platform:'node'});
+const {normalizeStudioMathEscapes}=await import('data:text/javascript;base64,'+Buffer.from(normalizeBuild.outputFiles[0].text).toString('base64'));
 test('native math retains fractions in scripts and roots, systems, arcs and parallel-equal notation',()=>{
   assert.match(mathOmml(String.raw`x^{\frac{1}{2}}+\sqrt[3]{\frac{a}{b}}`),/<m:sSup>[\s\S]*<m:f>/);
   assert.match(mathOmml(String.raw`\begin{cases}x+y=3\\x-y=1\end{cases}`),/<m:eqArr>/);
@@ -33,11 +36,29 @@ test('overgroup accents and bigodot retain distinct native mathematical symbols'
   assert.throws(()=>mathOmml(String.raw`\overgroup{AB`));
 });
 test('OCR nequiv typo is normalized to the intended parallel symbol',async()=>{
-  const normalizeBuild=await build({entryPoints:['lib/answer-studio-normalize.ts'],bundle:true,write:false,format:'esm',platform:'node'});
-  const {normalizeStudioMathEscapes}=await import('data:text/javascript;base64,'+Buffer.from(normalizeBuild.outputFiles[0].text).toString('base64'));
   const normalized=normalizeStudioMathEscapes(String.raw`$NE \nequiv BC$`);
   assert.equal(normalized,String.raw`$NE \parallel BC$`);
   assert.match(mathOmml(normalized),/>∥<\/m:t>/);
+});
+test('S9 winter answer export fixture keeps every reported math form native',async()=>{
+  const fixture=JSON.parse(await fs.readFile(new URL('./fixtures/answer-studio-s9-math.json',import.meta.url),'utf8'));
+  for(const sample of fixture.samples){
+    const normalized=normalizeStudioMathEscapes(sample.text);
+    for(const segment of splitMathText(normalized).filter(s=>s.kind==='math')){
+      assert.doesNotThrow(()=>mathOmml(segment.value),`paragraph ${sample.index} should remain editable math`);
+    }
+    // eslint-disable-next-line no-control-regex -- verify that repaired output contains no XML-invalid backspace
+    assert.doesNotMatch(normalized,/\x08/,'illegal XML control must not survive');
+  }
+  assert.match(mathOmml(String.raw`\boldsymbol\times`),/>×<\/m:t>/);
+  assert.match(mathOmml(String.raw`\text{√}{5}`),/<m:rad>/);
+});
+test('geometry square point-name markers become editable parallelogram symbols',()=>{
+  for(const source of [String.raw`$∵□ABCD$`,String.raw`$∴\\square BNCG\\Rightarrow CG=BN$`]){
+    const normalized=normalizeStudioMathEscapes(source);
+    assert.match(mathOmml(normalized.slice(1,-1)),/>▱<\/m:t>/);
+  }
+  assert.doesNotMatch(normalizeStudioMathEscapes(String.raw`$□1234$`),/parallelogram/);
 });
 test('phantom alignment remains hidden native math and retains its dimensions',()=>{
   const xml=mathOmml(String.raw`\phantom{\therefore \angle FED}=\angle FAE`);
