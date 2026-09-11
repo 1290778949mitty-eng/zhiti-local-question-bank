@@ -71,7 +71,7 @@ ${correctionContext}
 9. expected_labels 列出题干点名且印刷图中应出现的标签；constraints 用中文记录已核对的数学关系；warnings 记录无法确认的印刷细节。confidence 综合反映识别与复原把握。`;
     const functionRule = `\n10. 函数图中的每条抛物线或连续曲线必须作为一条 stroke，用 12—40 个按原图印刷轮廓采样的点平滑逼近，不能只给顶点和两个端点形成折角。主轴 id 必须分别命名为 x_axis 和 y_axis，箭头、刻度、虚线对称轴分别输出；题干、选项和学生批注文字不得出现在矢量稿中。`;
     const finalPrompt = `${prompt}${functionRule}`;
-    const base = apiBase(); const model = process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash"; const mode = process.env.OPENAI_API_MODE || "auto";
+    const base = apiBase(); const model = process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high"; const mode = process.env.OPENAI_API_MODE || "auto";
     let result = mode === "antigravity_gemini"
       ? await callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", apiKey, model, finalPrompt, [body.image], schema, reasoningEffort())
       : mode === "chat_completions" ? await callChat(base, apiKey, model, finalPrompt, body.image) : await callResponses(base, apiKey, model, finalPrompt, body.image);

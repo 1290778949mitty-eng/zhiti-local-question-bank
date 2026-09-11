@@ -5,7 +5,7 @@ import { fetchMe } from '../../lib/api-client';
 import type { AuthUser } from '../../lib/types';
 import { deduplicateStudioPages, emptyStudioDraft, type StudioDraft, type StudioRecord } from '../../lib/answer-studio';
 import { studioStorage } from '../../lib/answer-studio-storage';
-import { cropStudioImage, readStudioFiles, resizeStudioImage } from '../../lib/answer-studio-images';
+import { cropStudioImage, readStudioFilesInBatches, resizeStudioImage } from '../../lib/answer-studio-images';
 import { recognizeStudioDrawings } from '../../lib/answer-studio-drawings';
 import { transcribeStudio, type StudioDrawingResult } from '../../lib/answer-studio-pipeline';
 import { StudioDownloads, type StudioDownload } from '../../lib/answer-studio-downloads';
@@ -68,11 +68,15 @@ export default function AnswerStudioPage() {
       if(!resume&&(!answerFiles.length||(mode==='paired'&&!questionFiles.length)))throw new Error(mode==='paired'?'请上传原件和答案文件':'请上传答案文件');
       const draft=resume?structuredClone(saved):{...emptyStudioDraft(),title:title.trim(),inputMode:mode};
       if(variant){const blocker=studioOutputBlocker(draft,variant);if(blocker)throw new Error(blocker);}
+      const checkpoint=async(value:StudioDraft)=>{await studioStorage(user.id,'write',value);setSaved(value);};
       if(!resume){
         const input:[File[],'question'|'answer',string][]=mode==='paired'?[[questionFiles,'question',''],[answerFiles,'answer','']]:[[answerFiles,'answer','']];
-        for(const [selected,role,range] of input)draft.pages=deduplicateStudioPages([...draft.pages,...await readStudioFiles(selected,role,range,setNotice)]);
+        for(const [selected,role,range] of input) await readStudioFilesInBatches(selected,role,range,setNotice,async(batch,meta)=>{
+          draft.pages=deduplicateStudioPages([...draft.pages,...batch]);
+          await checkpoint(draft);
+          setNotice(`已读取 ${meta.fileName} 第 ${meta.batchIndex}/${meta.batchCount} 批（${draft.pages.length} 页），继续转录中…`);
+        });
       }
-      const checkpoint=async(value:StudioDraft)=>{await studioStorage(user.id,'write',value);setSaved(value);};
       await checkpoint(draft);
       const result=await transcribeStudio(draft,{
         progress:setNotice,checkpoint,

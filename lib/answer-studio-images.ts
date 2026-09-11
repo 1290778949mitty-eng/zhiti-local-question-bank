@@ -17,13 +17,18 @@ export async function resizeStudioImage(source:string,edge=2200) {
   const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
   return canvas.toDataURL("image/jpeg",.94);
 }
-export async function readStudioFiles(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void) {
-  const pages:StudioPage[]=[];
+export type StudioPageBatchMeta = { fileName:string; batchIndex:number; batchCount:number; pageStart:number; pageEnd:number };
+export type StudioPageBatchHandler = (pages:StudioPage[],meta:StudioPageBatchMeta)=>Promise<void>|void;
+const STUDIO_PAGE_BATCH_SIZE=40;
+
+/** Read source files in bounded batches so a large PDF never has to stay fully rasterized in memory. */
+export async function readStudioFilesInBatches(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void,onBatch:StudioPageBatchHandler,batchSize=STUDIO_PAGE_BATCH_SIZE) {
+  if(!Number.isInteger(batchSize)||batchSize<1) throw new Error("无效的页面批次大小");
   for (const file of files) {
     if (file.size>80_000_000) throw new Error("单个文件不得超过80MB");
-    const add=async(image:string,page:number)=> {
+    const add=async(image:string,page:number,target:StudioPage[])=> {
       const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(image));
-      pages.push({id:crypto.randomUUID(),role,name:file.name,page,image,hash:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join(""),selected:true});
+      target.push({id:crypto.randomUUID(),role,name:file.name,page,image,hash:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join(""),selected:true});
     };
     if (/\.pdf$/i.test(file.name)) {
       // ?url still transforms this .mjs in development, injecting page-only
@@ -33,22 +38,31 @@ export async function readStudioFiles(files:File[],role:StudioPage["role"],range
       pdfjs.GlobalWorkerOptions.workerSrc=`/pdfjs/${pdfjs.version}/pdf.worker.min.mjs`;
       const task=pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())});
       try {
-        const pdf=await task.promise,selected=parseStudioPages(range,pdf.numPages);
-        if (selected.length>80) throw new Error("一次最多选择80页");
-        for (const n of selected) {
-          progress(`读取 ${file.name} 第 ${n} 页`);
-          const page=await pdf.getPage(n),base=page.getViewport({scale:1}),viewport=page.getViewport({scale:3200/Math.max(base.width,base.height)});
-          const canvas=document.createElement("canvas");canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
-          await page.render({canvas,canvasContext:canvas.getContext("2d")!,viewport}).promise;
-          await add(canvas.toDataURL("image/jpeg",.97),n);page.cleanup();
+        const pdf=await task.promise,selected=parseStudioPages(range,pdf.numPages),batchCount=Math.max(1,Math.ceil(selected.length/batchSize));
+        for (let offset=0;offset<selected.length;offset+=batchSize) {
+          const batch=selected.slice(offset,offset+batchSize),pages:StudioPage[]=[];
+          progress(`读取 ${file.name}：第 ${Math.floor(offset/batchSize)+1}/${batchCount} 批（${batch[0]}–${batch[batch.length-1]} 页）`);
+          for (const n of batch) {
+            const page=await pdf.getPage(n),base=page.getViewport({scale:1}),viewport=page.getViewport({scale:3200/Math.max(base.width,base.height)});
+            const canvas=document.createElement("canvas");canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+            await page.render({canvas,canvasContext:canvas.getContext("2d")!,viewport}).promise;
+            await add(canvas.toDataURL("image/jpeg",.97),n,pages);page.cleanup();
+          }
+          await onBatch(pages,{fileName:file.name,batchIndex:Math.floor(offset/batchSize)+1,batchCount,pageStart:batch[0],pageEnd:batch[batch.length-1]});
         }
       } finally {await task.destroy();}
     } else {
       if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error("仅支持PDF、PNG、JPEG、WebP");
       const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file);});
-      await add(await resizeStudioImage(data,4200),1);
+      const pages:StudioPage[]=[];await add(await resizeStudioImage(data,4200),1,pages);
+      await onBatch(pages,{fileName:file.name,batchIndex:1,batchCount:1,pageStart:1,pageEnd:1});
     }
   }
+}
+
+export async function readStudioFiles(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void) {
+  const pages:StudioPage[]=[];
+  await readStudioFilesInBatches(files,role,range,progress,batch=>{pages.push(...batch);});
   return pages;
 }
 export async function studioDrawingContact(bases:StudioDiagram[],answers:string[],previews:string[]=[]) {

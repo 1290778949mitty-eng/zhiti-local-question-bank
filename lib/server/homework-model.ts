@@ -11,7 +11,7 @@ function apiBase() {
   return base;
 }
 
-function modelName() { return process.env.HOMEWORK_GRADING_MODEL || process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash"; }
+function modelName() { return process.env.HOMEWORK_GRADING_MODEL || process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high"; }
 
 function outputText(payload: Record<string, unknown>) {
   if (typeof payload.output_text === "string") return payload.output_text;

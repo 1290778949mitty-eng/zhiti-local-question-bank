@@ -13,7 +13,7 @@ set baseResult to display dialog "请输入 API 基础地址。使用自建 Sub2
 if button returned of baseResult is "暂不设置" then return "SKIP"
 set keyResult to display dialog "请输入这个服务签发的 API Key。Key 只会保存在本机。" default answer "" with title "知题智能识别 · 第 2 步" buttons {"暂不设置", "下一步"} default button "下一步" with hidden answer
 if button returned of keyResult is "暂不设置" then return "SKIP"
-set modelResult to display dialog "请输入中转站中支持图片理解的模型名称。推荐先使用你已映射的 GPT 视觉模型。" default answer "gpt-5.6-luna" with title "知题智能识别 · 第 3 步" buttons {"取消设置", "保存并启用"} default button "保存并启用"
+set modelResult to display dialog "请输入中转站中支持图片理解的模型名称。推荐先使用你已映射的 Gemini 视觉模型。" default answer "gemini-3.8-flash-high" with title "知题智能识别 · 第 3 步" buttons {"取消设置", "保存并启用"} default button "保存并启用"
 if button returned of modelResult is "取消设置" then return "SKIP"
 return (text returned of baseResult) & linefeed & (text returned of keyResult) & linefeed & (text returned of modelResult)
 APPLESCRIPT

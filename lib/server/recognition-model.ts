@@ -20,7 +20,7 @@ function outputText(payload: Record<string, unknown>) {
 async function callResponses(input: RecognitionModelInput): Promise<UpstreamResult> {
   const response = await fetch(`${apiBase()}/responses`, {
     method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash", store: false, reasoning: { effort: recognitionReasoningEffort() }, input: [{ role: "user", content: [{ type: "input_text", text: input.prompt }, { type: "input_image", image_url: input.image, detail: "high" }] }], text: { format: { type: "json_schema", name: input.schemaName, strict: true, schema: input.schema } } }),
+    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", store: false, reasoning: { effort: recognitionReasoningEffort() }, input: [{ role: "user", content: [{ type: "input_text", text: input.prompt }, { type: "input_image", image_url: input.image, detail: "high" }] }], text: { format: { type: "json_schema", name: input.schemaName, strict: true, schema: input.schema } } }),
   });
   const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
   return { status: response.status, text: response.ok ? outputText(payload) : undefined, error: payload.error?.message || (!response.ok ? `Responses 请求失败（${response.status}）` : undefined) };
@@ -29,7 +29,7 @@ async function callResponses(input: RecognitionModelInput): Promise<UpstreamResu
 async function callChatCompletions(input: RecognitionModelInput): Promise<UpstreamResult> {
   const response = await fetch(`${apiBase()}/chat/completions`, {
     method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash", reasoning_effort: recognitionReasoningEffort(), messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, { type: "image_url", image_url: { url: input.image, detail: "high" } }] }], response_format: { type: "json_schema", json_schema: { name: input.schemaName, strict: true, schema: input.schema } } }),
+    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", reasoning_effort: recognitionReasoningEffort(), messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, { type: "image_url", image_url: { url: input.image, detail: "high" } }] }], response_format: { type: "json_schema", json_schema: { name: input.schemaName, strict: true, schema: input.schema } } }),
   });
   const payload = await response.json() as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>; error?: { message?: string } };
   const content = payload.choices?.[0]?.message?.content;
@@ -38,7 +38,7 @@ async function callChatCompletions(input: RecognitionModelInput): Promise<Upstre
 
 export async function callRecognitionModel(input: RecognitionModelInput): Promise<UpstreamResult> {
   const mode = process.env.OPENAI_API_MODE || "auto";
-  if (mode === "antigravity_gemini") return callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", input.apiKey, process.env.OPENAI_VISION_MODEL || "gemini-3.7-flash", input.prompt, [input.image], input.schema, recognitionReasoningEffort());
+  if (mode === "antigravity_gemini") return callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", input.apiKey, process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", input.prompt, [input.image], input.schema, recognitionReasoningEffort());
   if (mode === "chat_completions") return callChatCompletions(input);
   const first = await callResponses(input);
   if (first.text && first.status < 400) return first;

@@ -419,7 +419,7 @@ test("routes every AI feature through the native Antigravity Gemini adapter", as
     assert.match(source, /mode === "antigravity_gemini"/);
     assert.match(source, /callAntigravityGemini/);
     assert.match(source, /schema, reasoningEffort\(\)\)/);
-    assert.match(source, /gemini-3\.7-flash/);
+    assert.match(source, /gemini-3\.8-flash-high/);
   }
   for (const route of ["recognize", "recognize-batch"]) {
     const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
@@ -428,5 +428,5 @@ test("routes every AI feature through the native Antigravity Gemini adapter", as
   assert.match(recognitionModel, /mode === "antigravity_gemini"/);
   assert.match(recognitionModel, /callAntigravityGemini/);
   assert.match(recognitionModel, /input\.schema, recognitionReasoningEffort\(\)/);
-  assert.match(recognitionModel, /gemini-3\.7-flash/);
+  assert.match(recognitionModel, /gemini-3\.8-flash-high/);
 });
