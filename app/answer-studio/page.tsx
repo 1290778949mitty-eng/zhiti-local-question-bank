@@ -3,14 +3,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchMe } from '../../lib/api-client';
 import type { AuthUser } from '../../lib/types';
-import { deduplicateStudioPages, emptyStudioDraft, validateStudioDraft, type StudioDraft, type StudioRecord } from '../../lib/answer-studio';
+import { deduplicateStudioPages, emptyStudioDraft, type StudioDraft, type StudioRecord } from '../../lib/answer-studio';
 import { studioStorage } from '../../lib/answer-studio-storage';
 import { cropStudioImage, readStudioFiles, resizeStudioImage } from '../../lib/answer-studio-images';
 import { recognizeStudioDrawings } from '../../lib/answer-studio-drawings';
 import { transcribeStudio, type StudioDrawingResult } from '../../lib/answer-studio-pipeline';
 import { StudioDownloads, type StudioDownload } from '../../lib/answer-studio-downloads';
-import { studioIncludesQuestionFigures, studioIssueCount, studioOutputBlocker, studioOutputs, studioTextReady, type StudioOutputMode } from '../../lib/answer-studio-output';
+import { studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, studioTextReady, type StudioOutputMode } from '../../lib/answer-studio-output';
 import './studio.css';
+
+function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'|'text'|'check'|'back'}) {
+  const paths={
+    check:<path d="m5 12 4 4L19 6"/>,
+    back:<path d="m10 5-7 7 7 7M3 12h18"/>,
+    pen:<><path d="m4 16.5 9.8-9.8 3.5 3.5-9.8 9.8L4 21l.5-4.5Z"/><path d="m12.5 8 3.5 3.5M4 21l4.5-.5"/></>,
+    files:<><path d="M7 3h8l3 3v15H7z"/><path d="M15 3v4h3M4 7v14h3M10 12h5M10 16h5"/></>,
+    file:<><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 13h6M9 17h4"/></>,
+    spark:<><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>,
+    download:<><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></>,
+    steps:<><path d="M6 5h12M6 12h12M6 19h12"/><path d="M3 5h.01M3 12h.01M3 19h.01"/></>,
+    text:<><path d="M5 5h14M5 10h14M5 15h9M5 20h7"/></>,
+  } as const;
+  return <svg className="studio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
 
 async function api<T>(url:string, body:unknown):Promise<T> {
   const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -23,7 +38,6 @@ export default function AnswerStudioPage() {
   const [user,setUser]=useState<AuthUser|null>(null),[loaded,setLoaded]=useState(false);
   const [mode,setMode]=useState<'paired'|'answers'>('paired'),[title,setTitle]=useState('');
   const [questionFiles,setQuestionFiles]=useState<File[]>([]),[answerFiles,setAnswerFiles]=useState<File[]>([]);
-  const [questionRange,setQuestionRange]=useState(''),[answerRange,setAnswerRange]=useState('');
   const [busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[failed,setFailed]=useState(false);
   const [saved,setSaved]=useState<StudioDraft|null>(null),[downloads,setDownloads]=useState<StudioDownload[]>([]);
   const [output,setOutput]=useState<StudioOutputMode>('full');
@@ -44,21 +58,9 @@ export default function AnswerStudioPage() {
     changed();const list=Array.from(selected||[]);if(role==='question')setQuestionFiles(list);else setAnswerFiles(list);
     if(!title.trim()&&list[0])setTitle(list[0].name.replace(/\.[^.]+$/,''));
   }
-  async function restore(file?:File){
-    if(!file||!user||running.current)return;
-    running.current=true;setBusy(true);
-    try{
-      const draft=validateStudioDraft(JSON.parse(await file.text()));
-      await studioStorage(user.id,'write',draft);
-      setDownloads(links.current.invalidate());setSaved(draft);setMode(draft.inputMode||'paired');setTitle(draft.title);
-      setQuestionFiles([]);setAnswerFiles([]);setNotice('已恢复项目，可选择结果版本或继续转录。');setFailed(false);
-    }catch(e){setNotice(e instanceof Error?e.message:'备份恢复失败');setFailed(true);}
-    finally{running.current=false;setBusy(false);}
-  }
   async function start(variant?:StudioOutputMode){
     if(running.current)return;
     running.current=true;setBusy(true);setFailed(false);setDownloads(links.current.invalidate());
-    let latest:StudioDraft|null=null;
     try{
       if(!user)throw new Error('请先登录');
       if(!title.trim())throw new Error('请填写资料名称');
@@ -67,11 +69,10 @@ export default function AnswerStudioPage() {
       const draft=resume?structuredClone(saved):{...emptyStudioDraft(),title:title.trim(),inputMode:mode};
       if(variant){const blocker=studioOutputBlocker(draft,variant);if(blocker)throw new Error(blocker);}
       if(!resume){
-        const input:[File[],'question'|'answer',string][]=mode==='paired'?[[questionFiles,'question',questionRange],[answerFiles,'answer',answerRange]]:[[answerFiles,'answer',answerRange]];
+        const input:[File[],'question'|'answer',string][]=mode==='paired'?[[questionFiles,'question',''],[answerFiles,'answer','']]:[[answerFiles,'answer','']];
         for(const [selected,role,range] of input)draft.pages=deduplicateStudioPages([...draft.pages,...await readStudioFiles(selected,role,range,setNotice)]);
       }
-      latest=draft;
-      const checkpoint=async(value:StudioDraft)=>{latest=value;await studioStorage(user.id,'write',value);setSaved(value);};
+      const checkpoint=async(value:StudioDraft)=>{await studioStorage(user.id,'write',value);setSaved(value);};
       await checkpoint(draft);
       const result=await transcribeStudio(draft,{
         progress:setNotice,checkpoint,
@@ -79,57 +80,47 @@ export default function AnswerStudioPage() {
         recognize:async(page,context)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context})).records,
         drawings:(question,bases,evidence,context)=>recognizeStudioDrawings(question,bases,evidence,body=>api<StudioDrawingResult>('/api/answer-studio/drawings',body),undefined,context),
       },{drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
-      latest=result;
       if(!variant){setNotice(`文字转录完成：${result.questions.length} 题。请选择结果版本；无图版本无需等待配图。`);return;}
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../lib/answer-studio-export');
       const label=studioOutputs.find(item=>item.value===variant)!.label;
       const blob=await buildStudioWord(result,variant,{transcription:true,bestEffort:true});
       setDownloads(links.current.offer(blob,`${result.title}_${label}.docx`,'下载 Word'));
-      const issueCount=studioIssueCount(result);
-      setNotice(`${label}已生成：${result.questions.length} 题。${variant==='full'?'':'已跳过配图处理。'}${issueCount?`发现 ${issueCount} 个提示，已写入 Word。`:''}请下载 Word，在文档中检查和修改。`);
+      setNotice('');
     }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'转录失败');}
     finally{
-      if(latest)setDownloads(links.current.offer(new Blob([JSON.stringify(latest)],{type:'application/json'}),`${latest.title}_转录备份.json`,'下载项目备份'));
       running.current=false;setBusy(false);
     }
   }
   if(!loaded)return <main className="answer-studio"><p>正在读取…</p></main>;
   if(!user)return <main className="answer-studio"><h1>手写转录</h1><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main>;
   return <main className="answer-studio answer-studio-simple">
-    <header><div><a href="/">← 返回 Mitty 题库</a><h1>手写转录</h1><p>上传材料，自动转录并下载 Word 结果</p></div><small>{user.local?'本地管理员':user.email}</small></header>
+    <header><div><a className="studio-back" href="/"><StudioIcon name="back"/><span>返回 Mitty 题库</span></a><div className="studio-title"><span className="studio-title-icon"><StudioIcon name="pen"/></span><h1>手写转录</h1></div></div><small>{user.local?'本地管理员':user.email}</small></header>
     <section className="simple-panel">
-      <fieldset className="studio-fields" disabled={busy}><legend>选择材料类型</legend>
+      <fieldset className="studio-fields" disabled={busy}><legend><span className="section-icon"><StudioIcon name="files"/></span>选择材料类型</legend>
         <div className="mode-choice">
-          <label><input type="radio" name="studio-mode" checked={mode==='paired'} onChange={()=>{changed();setMode('paired');}}/>提供原题和答案</label><span>分别上传干净原题与手写答案</span>
-          <label><input type="radio" name="studio-mode" checked={mode==='answers'} onChange={()=>{changed();setMode('answers');}}/>只有答案材料</label><span>上传带答案的讲义或答案页，有原题文字也会一并转录</span>
+          <label className="mode-card"><input id="studio-mode-paired" aria-label="提供原题和答案" type="radio" name="studio-mode" checked={mode==='paired'} onChange={()=>{changed();setMode('paired');}}/><span className="choice-copy"><strong>提供原题和答案</strong><small>分别上传干净原题与手写答案</small></span></label>
+          <label className="mode-card"><input id="studio-mode-answers" aria-label="只有答案材料" type="radio" name="studio-mode" checked={mode==='answers'} onChange={()=>{changed();setMode('answers');}}/><span className="choice-copy"><strong>只有答案材料</strong><small>上传带答案的讲义或答案页，有原题文字也会一并转录</small></span></label>
         </div>
-        <label>资料名称<input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
-        {mode==='paired'&&<label>上传原件（PDF、PNG、JPG、WebP）<input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('question',e.target.files)}/>{!!questionFiles.length&&<small>已选择 {questionFiles.length} 个文件</small>}</label>}
-        <label>上传手写答案（PDF、PNG、JPG、WebP）<input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('answer',e.target.files)}/>{!!answerFiles.length&&<small>已选择 {answerFiles.length} 个文件</small>}</label>
-        <details><summary>只处理部分 PDF 页码</summary>{mode==='paired'&&<label>原件页码<input value={questionRange} placeholder="留空处理全部，例如 1-3,5" onChange={e=>{changed();setQuestionRange(e.target.value);}}/></label>}<label>答案页码<input value={answerRange} placeholder="留空处理全部，例如 1-3,5" onChange={e=>{changed();setAnswerRange(e.target.value);}}/></label></details>
+        <label className="field-label"><span className="field-heading"><StudioIcon name="file"/>资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
+        {mode==='paired'&&<label className="field-label"><span className="field-heading"><StudioIcon name="file"/>上传原件 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('question',e.target.files)}/>{!!questionFiles.length&&<small className="file-picked">已选择 {questionFiles.length} 个文件</small>}</label>}
+        <label className="field-label"><span className="field-heading"><StudioIcon name="pen"/>上传手写答案 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('answer',e.target.files)}/>{!!answerFiles.length&&<small className="file-picked">已选择 {answerFiles.length} 个文件</small>}</label>
       </fieldset>
       {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
-      <p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(saved?'已恢复本机上次任务；选择新文件可开始新任务。':'先识别文字，再选择下载版本；仅完整解题版需要处理配图。')}</p>
+      {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
       {saved&&studioTextReady(saved)&&<section className="studio-results" aria-labelledby="studio-results-title">
-        <h2 id="studio-results-title">转录结果 <span className={studioIssueCount(saved)?'studio-issue-count has-issues':'studio-issue-count'}>当前 {studioIssueCount(saved)} 个提示</span></h2>
-        <p>已识别 {saved.questions.length} 题。三种版本共用转录内容，切换版本不会重新识别文字。</p>
-        <p className={`studio-notice${studioIssueCount(saved)?' studio-error':''}`} role="status">{studioIssueCount(saved)?`当前记录 ${studioIssueCount(saved)} 个转录或格式提示；生成不会中止，具体问题会写入 Word。`:'当前没有记录到格式提示。'}</p>
-        <fieldset className="studio-fields output-choices" disabled={busy}><legend className="output-legend">选择下载内容</legend>
+        <h2 id="studio-results-title">转录结果</h2>
+        <div className="result-summary" role="status"><span className="result-summary-icon"><StudioIcon name="check"/></span><span className="result-summary-number">{saved.questions.length}</span><span className="result-summary-label">道题已识别</span></div>
+        <fieldset className="studio-fields output-choices" disabled={busy}><legend className="output-legend"><span className="section-icon"><StudioIcon name="download"/></span>选择下载内容</legend>
           {studioOutputs.map(item=><label key={item.value} htmlFor={`studio-output-${item.value}`} aria-label={item.label} className={output===item.value?'output-choice selected':'output-choice'}>
             <input id={`studio-output-${item.value}`} type="radio" name="studio-output" value={item.value} checked={output===item.value} onChange={()=>{setOutput(item.value);setDownloads(links.current.invalidate());setNotice(item.value==='full'?'已选择完整解题版，生成时将处理尚未完成的配图。':'已选择无图版本，将跳过配图处理，直接生成 Word。');setFailed(false);}}/>
-            <span><strong>{item.label}</strong><small>{item.value==='full'?(studioIncludesQuestionFigures(saved)?'原题、步骤解析、原题配图和解答辅助图。':'原题文字、步骤解析和解答辅助图；不另配原题图，保留辅助作图所依附的必要底图。'):item.description}</small></span>
+            <span className="output-icon"><StudioIcon name={item.value==='full'?'spark':item.value==='text'?'text':'steps'}/></span><span className="output-copy"><strong>{item.label}</strong><small>{item.value==='full'?(studioIncludesQuestionFigures(saved)?'原题、解析、原题图和解答图。':'原题文字、解析和解答图（含必要底图）。'):item.description}</small></span>
           </label>)}
         </fieldset>
         {studioOutputBlocker(saved,output)&&<p className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
         {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':output==='full'?'生成完整解题版':'生成无图 Word'}</button>}
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
       </section>}
-      <details><summary>本地项目备份</summary>
-        {saved&&<button disabled={busy} onClick={()=>setDownloads(links.current.offer(new Blob([JSON.stringify(saved)],{type:'application/json'}),`${saved.title}_转录备份.json`,'下载项目备份'))}>生成备份</button>}
-        {downloads.filter(file=>file.label!=='下载 Word').map(file=><a key={file.url} href={file.url} download={file.name}>{file.label}</a>)}
-        <label>恢复 JSON 备份<input type="file" accept="application/json,.json" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';void restore(file);}}/></label>
-      </details>
       <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。任务保存在当前浏览器，不跨设备同步；识别有疑问处会在 Word 中提示。</small>
     </section>
   </main>;
