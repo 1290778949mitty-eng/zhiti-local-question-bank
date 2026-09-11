@@ -52,6 +52,7 @@ function textRuns(text: string, size = BODY_SIZE, style: RunStyle = {}) {
 const latexSymbols: Record<string, string> = {
   times: "×", div: "÷", cdot: "·", pm: "±", mp: "∓", le: "≤", leq: "≤", ge: "≥", geq: "≥",
   ne: "≠", neq: "≠", approx: "≈", angle: "∠", triangle: "△", pi: "π", Delta: "Δ", delta: "δ", infty: "∞", therefore: "∴", because: "∵",
+  circ: "°", sim: "∽", backsim: "∽", cong: "≌", perp: "⊥", parallel: "∥", cdots: "⋯", ldots: "…", quad: "　", qquad: "　　",
 };
 const superscripts: Record<string, string> = { "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁺": "+", "⁻": "−" };
 
@@ -63,6 +64,14 @@ function mathComponents(source: string): MathComponent[] {
     while (/\s/.test(text[cursor.index] ?? "")) cursor.index += 1;
     if (text[cursor.index] === "{") { cursor.index += 1; return sequence("}"); }
     if (text[cursor.index] === "(") { cursor.index += 1; return [new MathRoundBrackets({ children: sequence(")") })]; }
+    if (text[cursor.index] === "\\") {
+      cursor.index += 1;
+      const command = text.slice(cursor.index).match(/^[A-Za-z]+/)?.[0] ?? text[cursor.index] ?? "";
+      cursor.index += command.length;
+      if (["mathrm", "text", "operatorname", "mathbf", "mathit", "textrm"].includes(command)) return group();
+      if (command === "sqrt") return [new MathRadical({ children: group() })];
+      return [new MathRun(latexSymbols[command] ?? command)];
+    }
     const char = text[cursor.index++] ?? "";
     return char ? [new MathRun(char)] : [];
   }
@@ -79,6 +88,8 @@ function mathComponents(source: string): MathComponent[] {
         const command = text.slice(cursor.index).match(/^[A-Za-z]+/)?.[0] ?? text[cursor.index] ?? "";
         cursor.index += command.length;
         if (command === "left" || command === "right") continue;
+        if (["mathrm", "text", "operatorname", "mathbf", "mathit", "textrm"].includes(command)) { result.push(...group()); continue; }
+        if ([",", ";", "!", " "].includes(command)) { if (command !== "!") result.push(new MathRun(" ")); continue; }
         if (command === "frac") { result.push(new MathFraction({ numerator: group(), denominator: group() })); continue; }
         if (command === "sqrt") { result.push(new MathRadical({ children: group() })); continue; }
         result.push(new MathRun(latexSymbols[command] ?? command));
@@ -124,7 +135,7 @@ function needsWordEquation(value: string, explicit = false) {
   return needsWordMathEquation(value, explicit);
 }
 
-function richText(text: string, style: RunStyle = {}): ParagraphChild[] {
+export function richText(text: string, style: RunStyle = {}): ParagraphChild[] {
   return splitMathText(text).flatMap((segment) => segment.kind === "math" && needsWordEquation(segment.value, segment.explicit)
     ? [equation(segment.value)]
     : textRuns(segment.value, BODY_SIZE, { ...style, italicMath: true }));
@@ -280,7 +291,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
       // backslash sequence before transplanting the otherwise untouched paragraph.
       let safeParagraphXml = sanitizeXml10(replacement.xml);
       if (replacement.questionNumber != null) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}[.．、]/, `$1${replacement.questionNumber}．`);
-      for (const oldId of Array.from(safeParagraphXml.matchAll(/r:embed="([^"]+)"/g), (match) => match[1])) {
+      for (const oldId of new Set(Array.from(safeParagraphXml.matchAll(/r:(?:embed|id)="([^"]+)"/g), (match) => match[1]))) {
         const source = replacement.assets?.[oldId]; if (!source) continue;
         embeddedImageIndex += 1;
         const { data, type } = await resolveImage(source);
@@ -289,6 +300,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
         archive.file(`word/media/${fileName}`, data);
         relationshipsXml = relationshipsXml.replace("</Relationships>", `<Relationship Id="${newId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${fileName}"/></Relationships>`);
         safeParagraphXml = safeParagraphXml.replaceAll(`r:embed="${oldId}"`, `r:embed="${newId}"`);
+        safeParagraphXml = safeParagraphXml.replaceAll(`r:id="${oldId}"`, `r:id="${newId}"`);
       }
       documentXml = documentXml.replace(placeholderParagraph, () => safeParagraphXml);
     }

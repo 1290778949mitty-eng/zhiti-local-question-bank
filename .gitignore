@@ -43,6 +43,7 @@ yarn-error.log*
 /.codex/config.toml
 /public/opencv.js
 /public/document-scanner-worker.js
+/public/pdfjs/
 /outputs/
 /work/
 /artifacts/

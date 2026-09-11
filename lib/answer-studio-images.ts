@@ -1,0 +1,73 @@
+import { parseStudioPages, type StudioBox, type StudioPage, type StudioDiagram } from "./answer-studio";
+
+export async function loadStudioImage(source:string):Promise<HTMLImageElement> {
+  return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error("无法读取原图"));image.src=source;});
+}
+export async function cropStudioImage(source:string,box:StudioBox,width=600) {
+  const image=await loadStudioImage(source),canvas=document.createElement("canvas");
+  const sw=image.width*box.width/1000,sh=image.height*box.height/1000;
+  canvas.width=Math.min(width,sw);canvas.height=Math.max(1,Math.round(canvas.width*sh/sw));
+  const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(image,image.width*box.x/1000,image.height*box.y/1000,sw,sh,0,0,canvas.width,canvas.height);
+  return {image:canvas.toDataURL("image/png"),width:canvas.width,height:canvas.height};
+}
+export async function resizeStudioImage(source:string,edge=2200) {
+  const image=await loadStudioImage(source),canvas=document.createElement("canvas"),scale=Math.min(1,edge/Math.max(image.width,image.height));
+  canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale);
+  const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
+  return canvas.toDataURL("image/jpeg",.94);
+}
+export async function readStudioFiles(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void) {
+  const pages:StudioPage[]=[];
+  for (const file of files) {
+    if (file.size>80_000_000) throw new Error("单个文件不得超过80MB");
+    const add=async(image:string,page:number)=> {
+      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(image));
+      pages.push({id:crypto.randomUUID(),role,name:file.name,page,image,hash:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join(""),selected:true});
+    };
+    if (/\.pdf$/i.test(file.name)) {
+      // ?url still transforms this .mjs in development, injecting page-only
+      // HMR into a Worker (window is undefined). Config prepares a versioned,
+      // untransformed public asset for both dev and production.
+      const pdfjs=await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc=`/pdfjs/${pdfjs.version}/pdf.worker.min.mjs`;
+      const task=pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())});
+      try {
+        const pdf=await task.promise,selected=parseStudioPages(range,pdf.numPages);
+        if (selected.length>80) throw new Error("一次最多选择80页");
+        for (const n of selected) {
+          progress(`读取 ${file.name} 第 ${n} 页`);
+          const page=await pdf.getPage(n),base=page.getViewport({scale:1}),viewport=page.getViewport({scale:3200/Math.max(base.width,base.height)});
+          const canvas=document.createElement("canvas");canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+          await page.render({canvas,canvasContext:canvas.getContext("2d")!,viewport}).promise;
+          await add(canvas.toDataURL("image/jpeg",.97),n);page.cleanup();
+        }
+      } finally {await task.destroy();}
+    } else {
+      if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error("仅支持PDF、PNG、JPEG、WebP");
+      const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file);});
+      await add(await resizeStudioImage(data,4200),1);
+    }
+  }
+  return pages;
+}
+export async function studioDrawingContact(bases:StudioDiagram[],answers:string[],previews:string[]=[]) {
+  const sources=[...bases.map((d,i)=>({label:`BASE ${i}`,source:d.baseImage})),...answers.map((s,i)=>({label:`ANSWER ${i}`,source:s})),...previews.map((s,i)=>({label:`PREVIEW ${i} (generated, not source)`,source:s}))];
+  const images=await Promise.all(sources.map(s=>loadStudioImage(s.source)));
+  const width=1400,heights=images.map(im=>Math.round(im.height*(width-80)/im.width)+90);
+  const canvas=document.createElement("canvas");canvas.width=width;canvas.height=heights.reduce((a,b)=>a+b,0);
+  if(canvas.height>16000) throw new Error("解答图原件过长，请逐段处理");
+  const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,width,canvas.height);let y=0;
+  images.forEach((im,i)=>{
+    const scale=(width-80)/im.width,top=y+65,left=55;
+    ctx.fillStyle="#000";ctx.font="bold 24px sans-serif";ctx.fillText(`${sources[i].label}   original ${im.width} × ${im.height}`,10,y+28);
+    ctx.drawImage(im,left,top,im.width*scale,im.height*scale);
+    if(i<bases.length){
+      ctx.font="18px sans-serif";ctx.fillStyle="#1761a0";ctx.strokeStyle="#7fb0d055";ctx.lineWidth=1;
+      for(let x=0;x<=im.width;x+=50){ctx.fillText(String(x),left+x*scale-8,top-9);ctx.beginPath();ctx.moveTo(left+x*scale,top);ctx.lineTo(left+x*scale,top+im.height*scale);ctx.stroke();}
+      for(let yy=0;yy<=im.height;yy+=50){ctx.fillText(String(yy),4,top+yy*scale+6);ctx.beginPath();ctx.moveTo(left,top+yy*scale);ctx.lineTo(left+im.width*scale,top+yy*scale);ctx.stroke();}
+    }
+    y+=heights[i];
+  });
+  return canvas.toDataURL("image/jpeg",.95);
+}

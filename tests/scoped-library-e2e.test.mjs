@@ -6,6 +6,22 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { request as httpRequest } from 'node:http';
+
+// Test transport is always loopback. A proxy/fake-IP DNS must not send this
+// isolated regression's requests to an external address. Keep the public Host
+// header so the application still exercises its non-local authorization path.
+async function fetch(input, options={}) {
+  const url=new URL(input);
+  if(!['public.localtest.me','localhost','127.0.0.1'].includes(url.hostname))throw new Error('Non-local regression URL');
+  return new Promise((resolveResponse,reject)=>{
+    const req=httpRequest({hostname:'127.0.0.1',port:url.port,path:url.pathname+url.search,method:options.method||'GET',headers:{...options.headers,Host:url.host,...(options.body!==undefined?{'Content-Length':Buffer.byteLength(options.body)}:{})}},res=>{
+      const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolveResponse(new Response(Buffer.concat(chunks),{status:res.statusCode,headers:res.headers})));
+    });
+    req.on('error',reject);req.setTimeout(5000,()=>req.destroy(new Error(`Local regression request timeout: ${options.method||'GET'} ${url.pathname}`)));
+    req.end(options.body);
+  });
+}
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");

@@ -1,0 +1,15 @@
+{
+  "description":"Human-reviewed source annotations for the supplied first-lesson fixture; coordinates never enter production recognition rules.",
+  "questions":[
+    {"section":"例题精练","number":"1","note":"已对照PDF第1页，文字、公式和步骤完整，本题无解答图。"},
+    {"section":"例题精练","number":"2","note":"答案只写根号10；红点O位于网格最底行第二条竖线交点，不补写推导。","diagrams":[{"index":0,"crop":{"x":710,"y":376,"width":203,"height":132},"shapes":[{"kind":"point","x":176,"y":493,"width":8,"height":8,"dash":false},{"kind":"label","x":168,"y":510,"width":34,"height":34,"text":"O","dash":false}]}]},
+    {"section":"例题精练","number":"3","note":"两幅独立解答图逐一对照原件，保留原图点名、圆及老师线段，不添加新构造。","diagrams":[{"index":0,"labelsHeight":30},{"index":1,"labelsHeight":30}]},
+    {"section":"例题精练","number":"4","note":"锐角与钝角两种情况及84度、50度、130度均与原件一致，本题无补画。"},
+    {"section":"例题精练","number":"5","note":"按原图圆心位置校正D与两条虚线；竖虚线在原印刷C标签处留空避免遮字，文字保留老师原有解法。","diagrams":[{"index":0,"shapes":[{"x":282,"y":145,"width":0,"height":372},{"x":282,"y":565,"width":0,"height":25},{"x":115,"y":364,"width":323,"height":0},{"kind":"point","x":278,"y":360,"width":8,"height":8,"dash":false},{"kind":"label","x":294,"y":322,"width":35,"height":35,"text":"D","dash":false}]}]},
+    {"section":"知识拼接","number":"1","note":"原件没有新增辅助图形，保留干净底图；射影定理与角度推理步骤已逐行核对。"},
+    {"section":"知识拼接","number":"2","note":"辅助线从原图A和C出发到新增E；E在BA延长线上，保留虚线与点名，不另画外接圆。","diagrams":[{"index":0,"shapes":[{"x":293,"y":201,"width":102,"height":-276},{"x":394,"y":475,"width":1,"height":-550},{"kind":"label","x":403,"y":-103,"width":35,"height":35,"text":"E","dash":false}]}]},
+    {"section":"知识拼接","number":"3","note":"全部证明步骤与原件一致，原件没有补画；保留底图。"},
+    {"section":"知识拼接","number":"4","note":"按原图A、E、F端点校正AE与AF虚线，不添加原件没有的圆或角标；去掉识别时在即有前多加的因此符号。","textReplacements":[{"from":"$\\therefore$ 即有","to":"即有"}],"diagrams":[{"index":0,"crop":{"x":675,"y":203,"width":245,"height":105},"shapes":[{"x":208,"y":49,"width":-35,"height":150},{"x":208,"y":49,"width":223,"height":47}]}]},
+    {"section":"自主练习","number":"1","note":"从原图P点连接B、E、F、C四条红色虚线；保留原题已有PD，不重复描线。","diagrams":[{"index":0,"shapes":[{"x":185,"y":72,"width":-120,"height":448},{"x":185,"y":72,"width":-12,"height":236},{"x":185,"y":72,"width":221,"height":189},{"x":185,"y":72,"width":349,"height":448}]}]}
+  ]
+}

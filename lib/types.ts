@@ -141,6 +141,7 @@ export type Question = {
   optionsDocxAssets?: Record<string, string>;
   answer: string;
   analysis: string;
+  studioSource?: import("./answer-studio").StudioQuestion;
   analysisDocxXml?: string[];
   analysisDocxAssets?: Record<string, string>;
   source: string;

@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { cdnAdapter } from "@vinext/cloudflare/cache/cdn-adapter";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { preparePdfWorker } from "./scripts/prepare-pdf-worker.mjs";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
@@ -36,6 +37,7 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  await preparePdfWorker();
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -52,6 +54,7 @@ export default defineConfig(async () => {
       }),
       sites(),
       cloudflare({
+        ...(process.env.STUDIO_TEST_STATE ? { persistState: { path: process.env.STUDIO_TEST_STATE }, remoteBindings: false } : {}),
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: localBindingConfig,
       }),
