@@ -10,6 +10,7 @@ import { recognizeStudioDrawings } from '../../lib/answer-studio-drawings';
 import { transcribeStudio, type StudioDrawingResult } from '../../lib/answer-studio-pipeline';
 import { StudioDownloads, type StudioDownload } from '../../lib/answer-studio-downloads';
 import { studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, studioTextReady, type StudioOutputMode } from '../../lib/answer-studio-output';
+import { studioApi as api, STUDIO_TEXT_CONCURRENCY, STUDIO_CONCURRENCY_CHOICES } from '../../lib/answer-studio-concurrency';
 import './studio.css';
 
 function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'|'text'|'check'|'back'}) {
@@ -27,13 +28,6 @@ function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'
   return <svg className="studio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 
-async function api<T>(url:string, body:unknown):Promise<T> {
-  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const data=await response.json().catch(()=>({error:`识别服务返回异常（${response.status}）`}));
-  if(!response.ok)throw new Error(data.error||'识别失败');
-  return data;
-}
-
 export default function AnswerStudioPage() {
   const [user,setUser]=useState<AuthUser|null>(null),[loaded,setLoaded]=useState(false);
   const [mode,setMode]=useState<'paired'|'answers'>('paired'),[title,setTitle]=useState('');
@@ -42,6 +36,7 @@ export default function AnswerStudioPage() {
   const [saved,setSaved]=useState<StudioDraft|null>(null),[downloads,setDownloads]=useState<StudioDownload[]>([]);
   const [output,setOutput]=useState<StudioOutputMode>('full');
   const [includeTranscriptionWarnings,setIncludeTranscriptionWarnings]=useState(true);
+  const [textConcurrency,setTextConcurrency]=useState(STUDIO_TEXT_CONCURRENCY);
   const links=useRef(new StudioDownloads()),running=useRef(false);
   useEffect(()=>{
     let active=true;const urls=links.current;
@@ -82,9 +77,9 @@ export default function AnswerStudioPage() {
       const result=await transcribeStudio(draft,{
         progress:setNotice,checkpoint,
         crop:(image,box)=>cropStudioImage(image,box,1200),
-        recognize:async(page,context)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context})).records,
+        recognize:async(page,context,requestOptions)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context,concurrent:!!requestOptions?.concurrent})).records,
         drawings:(question,bases,evidence,context)=>recognizeStudioDrawings(question,bases,evidence,body=>api<StudioDrawingResult>('/api/answer-studio/drawings',body),undefined,context),
-      },{drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
+      },{textConcurrency,drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
       if(!variant){setNotice(`文字转录完成：${result.questions.length} 题。请选择结果版本；无图版本无需等待配图。`);return;}
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../lib/answer-studio-export');
@@ -110,6 +105,16 @@ export default function AnswerStudioPage() {
         <label className="field-label"><span className="field-heading"><StudioIcon name="file"/>资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
         {mode==='paired'&&<label className="field-label"><span className="field-heading"><StudioIcon name="file"/>上传原件 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('question',e.target.files)}/>{!!questionFiles.length&&<small className="file-picked">已选择 {questionFiles.length} 个文件</small>}</label>}
         <label className="field-label"><span className="field-heading"><StudioIcon name="pen"/>上传手写答案 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('answer',e.target.files)}/>{!!answerFiles.length&&<small className="file-picked">已选择 {answerFiles.length} 个文件</small>}</label>
+<details style={{marginTop:12,fontSize:14}}>
+          <summary style={{cursor:'pointer'}}>转录速度：最多 {textConcurrency} 路</summary>
+          <label htmlFor="studio-text-concurrency" style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginTop:8}}>
+            <span>同时识别页数</span>
+            <select id="studio-text-concurrency" value={textConcurrency} disabled={busy} style={{width:'auto',minWidth:110,padding:'6px 10px'}} onChange={e=>setTextConcurrency(Number(e.target.value))}>
+              {STUDIO_CONCURRENCY_CHOICES.map(value=><option key={value} value={value}>{value} 路{value===1?'（逐页）':value===4?'（推荐）':''}</option>)}
+            </select>
+          </label>
+          <small>默认 4 路，遇限流自动降速；跨页连续解答较多时可选 1 路。完整解题版配图最多 2 路。</small>
+        </details>
       </fieldset>
       {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
       {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}

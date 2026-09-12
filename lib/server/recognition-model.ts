@@ -22,8 +22,8 @@ async function callResponses(input: RecognitionModelInput): Promise<UpstreamResu
     method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", store: false, reasoning: { effort: recognitionReasoningEffort() }, input: [{ role: "user", content: [{ type: "input_text", text: input.prompt }, { type: "input_image", image_url: input.image, detail: "high" }] }], text: { format: { type: "json_schema", name: input.schemaName, strict: true, schema: input.schema } } }),
   });
-  const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
-  return { status: response.status, text: response.ok ? outputText(payload) : undefined, error: payload.error?.message || (!response.ok ? `Responses 请求失败（${response.status}）` : undefined) };
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown> & { error?: { message?: string } };
+  return { status: response.status, retryAfter: response.headers.get("retry-after"), text: response.ok ? outputText(payload) : undefined, error: payload.error?.message || (!response.ok ? `Responses 请求失败（${response.status}）` : undefined) };
 }
 
 async function callChatCompletions(input: RecognitionModelInput): Promise<UpstreamResult> {
@@ -31,9 +31,9 @@ async function callChatCompletions(input: RecognitionModelInput): Promise<Upstre
     method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", reasoning_effort: recognitionReasoningEffort(), messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, { type: "image_url", image_url: { url: input.image, detail: "high" } }] }], response_format: { type: "json_schema", json_schema: { name: input.schemaName, strict: true, schema: input.schema } } }),
   });
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>; error?: { message?: string } };
+  const payload = await response.json().catch(() => ({})) as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>; error?: { message?: string } };
   const content = payload.choices?.[0]?.message?.content;
-  return { status: response.status, text: response.ok ? typeof content === "string" ? content : content?.find((item) => item.type === "text")?.text : undefined, error: payload.error?.message || (!response.ok ? `Chat Completions 请求失败（${response.status}）` : undefined) };
+  return { status: response.status, retryAfter: response.headers.get("retry-after"), text: response.ok ? typeof content === "string" ? content : content?.find((item) => item.type === "text")?.text : undefined, error: payload.error?.message || (!response.ok ? `Chat Completions 请求失败（${response.status}）` : undefined) };
 }
 
 export async function callRecognitionModel(input: RecognitionModelInput): Promise<UpstreamResult> {
@@ -42,6 +42,9 @@ export async function callRecognitionModel(input: RecognitionModelInput): Promis
   if (mode === "chat_completions") return callChatCompletions(input);
   const first = await callResponses(input);
   if (first.text && first.status < 400) return first;
+  // Studio controls backoff. Do not immediately retry a rate limit or auth
+  // error through a different protocol before its Retry-After has elapsed.
+  if (input.schemaName.startsWith("teacher_") && [401,403,408,429,500,502,503,504].includes(first.status)) return first;
   const fallback = await callChatCompletions(input);
   if (!fallback.error) fallback.error = first.error;
   return fallback;
