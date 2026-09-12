@@ -1,38 +1,34 @@
+import { repairMathSource, scanMathSource } from "./math-source.mjs";
+import { studioMathIssues } from "./studio-math-layout";
 import { hasStudioControlCharacters, type StudioAnswerPlacement, type StudioTable } from './answer-studio';
 
 // A model may emit a valid JSON escape (e.g. \t) instead of the LaTeX
 // backslash. Repair only unambiguous command suffixes inside explicit math;
 // never reinterpret ordinary prose whitespace or guess mathematical content.
 export function normalizeStudioMathEscapes(text: string) {
-  // Backspace is illegal in XML. Its known TeX suffixes are unambiguous
-  // even without dollar delimiters. Do not reinterpret prose tabs/newlines.
   // eslint-disable-next-line no-control-regex -- JSON-decoded TeX commands
   text=text.replace(/\\*\x08(oldsymbol|ecause|eta|egin|ot|igodot)\b/g, '\\b$1');
-  // Repair only a whole formula line with a missing closing delimiter. A
-  // currency value or an arbitrary unmatched dollar in prose is not math.
-  text=text.replace(/^(\s*)\$([^$\r\n]+)$/gm,(line,space,body)=>
-    /[=^_]|\\[A-Za-z]+/.test(body)&&!/[\u3400-\u9fff]/.test(body)?`${space}$${body}$`:line);
-  return text.replace(/\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, math => {
-    const repaired=math
-    .replace(/\\*nequiv\b/g, '\\parallel')
-    .replace(/\\*\triangle\b/g, '\\triangle')
-    .replace(/\\*\t(ext|imes|heta|frac)\b/g, '\\t$1')
-    .replace(/\\*\f(rac)\b/g, '\\f$1')
-    // eslint-disable-next-line no-control-regex -- Repair JSON backspace escapes, not word boundaries.
-    .replace(/\\*\x08(ecause|eta|egin|ot|igodot)\b/g, '\\b$1')
-    .replace(/\\*\r(ight)\b/g, '\\r$1')
-    .replace(/\\*\n(eq)\b/g, '\\n$1');
-    // In a standalone formula, a doubled command escape is JSON damage, not
-    // a literal backslash followed by letters. Never decode environment row
-    // separators or text arguments (which can legitimately contain slashes).
-    // Detect environments after repairing a possibly damaged \begin escape.
-    const cleaned=repaired.replace(/\\+\s*(?=\$)/g, '').replace(/\\+\s*$/, '');
-    if (/\\+(?:begin|end|text|textrm|operatorname)\b/.test(cleaned)) return cleaned;
-    // Collapse any number of duplicated command slashes. Environment row
-    // separators are deliberately excluded above because `\\\\x` is data,
-    // not a duplicated `\\x` command in that context.
-    return cleaned.replace(/\\{2,}(?=[A-Za-z])/g, '\\');
-  });
+  const source=repairMathSource(text);
+  let cursor=0,result='';
+  for(const range of scanMathSource(source).ranges) {
+    const markerLength=source[range.start]==='$'?(range.display?2:1):2;
+    const start=range.start+markerLength,end=range.end-markerLength;
+    let body=range.value
+      .replace(/\\*nequiv\b/g, '\\parallel')
+      .replace(/\\*\triangle\b/g, '\\triangle')
+      .replace(/\\*\t(ext|imes|heta|frac)\b/g, '\\t$1')
+      .replace(/\\*\f(rac)\b/g, '\\f$1')
+      // eslint-disable-next-line no-control-regex -- Known JSON escape damage
+      .replace(/\\*\x08(ecause|eta|egin|ot|igodot)\b/g, '\\b$1')
+      .replace(/\\*\r(ight)\b/g, '\\r$1')
+      .replace(/\\*\n(eq)\b/g, '\\n$1');
+    // Only a redundant trailing row-break on a standalone expression. Never
+    // strip an escaped dollar inside text or collapse aligned/cases row breaks.
+    if(!/\\(?:begin|end|text|textrm|operatorname)\b/.test(body))body=body.replace(/\\{2,}\s*$/, '');
+    result+=source.slice(cursor,start)+body+source.slice(end,range.end);
+    cursor=range.end;
+  }
+  return repairMathSource(result+source.slice(cursor));
 }
 
 function validPlacement(value:unknown):value is StudioAnswerPlacement {
@@ -75,7 +71,11 @@ export function normalizeStudioTextFields<T extends {stem:string;analysis:string
     ? ((record as T & {tables?:unknown}).tables as StudioTable[]).map(table=>({...table,rows:table.rows.map(row=>row.map(cell=>normalizeStudioMathEscapes(cell))),warnings:[...table.warnings],red:table.red}))
     : [];
   const controlWarning='识别结果含异常控制字符，请对照原件修复公式';
-  const warnings=[...new Set([...record.warnings,...placement.warnings])].filter(w=>w!==controlWarning);
+  const warnings=[...new Set([...record.warnings,...placement.warnings])].filter(w=>w!==controlWarning&&!w.startsWith('公式格式检查：'));
   if([stem,analysis,...answerPlacements.flatMap(p=>[p.placeholder,p.answer]),...tables.flatMap(t=>t.rows.flat())].some(hasStudioControlCharacters))warnings.push(controlWarning);
+  const mathFields:[string,string][]=[['题干',stem],['解析',analysis],
+    ...answerPlacements.map(p=>['短答案',p.answer] as [string,string]),
+    ...tables.flatMap(t=>t.rows.flat().map(cell=>['表格',cell] as [string,string]))];
+  for(const [field,value] of mathFields)for(const issue of studioMathIssues(value))warnings.push(`公式格式检查：${field}：${issue}`);
   return {...record,stem,analysis,answerPlacements,tables,warnings:[...new Set(warnings)]};
 }
