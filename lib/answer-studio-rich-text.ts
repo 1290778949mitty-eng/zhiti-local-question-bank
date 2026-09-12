@@ -3,7 +3,8 @@ import { splitMathText } from './answer-studio-math-text';
 import { needsWordMathEquation } from './math-notation.mjs';
 import { mathOmml } from './math-omml';
 import { xmlSafeText } from './xml-text';
-const BODY_SIZE=21;
+// Match the Normal and StudioAnswer paragraph styles (11 pt).
+const BODY_SIZE=22;
 const BODY_FONT={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman',hint:'eastAsia'} as const;
 type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean};
 class NativeMathXml extends ImportedXmlComponent {

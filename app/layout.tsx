@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "katex/dist/katex.min.css";
 import "./globals.css";
+import "./math-typography.css";
 
 export const metadata: Metadata = {
   title: "Mitty 的宝藏题库",

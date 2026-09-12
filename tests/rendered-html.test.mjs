@@ -156,7 +156,7 @@ test("keeps explanatory parentheses outside equations and formats complete inequ
   assert.equal(needsWordMathEquation("a"), false);
 });
 
-test("uses display fractions for nested formulas without enlarging their outer characters", () => {
+test("preserves fraction styles and Word sizes instead of forcing nested enlargement", () => {
   const deep = String.raw`1+\frac{1}{1+\frac{1}{1+\frac{1}{4x}}}=\frac{3038}{2025}`;
   const nested = String.raw`1+\frac{1}{1+\frac{1}{x}}`;
   const ordinary = String.raw`\frac{1}{2}`;
@@ -167,10 +167,10 @@ test("uses display fractions for nested formulas without enlarging their outer c
   assert.equal(fractionSizeClass(deep), "math-fraction-deep");
   assert.equal(fractionSizeClass(nested), "math-fraction-nested");
   assert.equal(fractionSizeClass(ordinary), "");
-  assert.equal(toReadableNestedFractionLatex(deep), String.raw`1+\dfrac{1}{1+\dfrac{1}{1+\dfrac{1}{4x}}}=\dfrac{3038}{2025}`);
-  assert.equal(toReadableNestedFractionLatex(nested), String.raw`1+\dfrac{1}{1+\dfrac{1}{x}}`);
+  assert.equal(toReadableNestedFractionLatex(deep), deep);
+  assert.equal(toReadableNestedFractionLatex(nested), nested);
   assert.equal(toReadableNestedFractionLatex(ordinary), ordinary);
-  assert.equal(toReadableNestedFractionLatex(String.raw`1+\dfrac{1}{1+\tfrac{1}{x}}`), String.raw`1+\dfrac{1}{1+\dfrac{1}{x}}`);
+  assert.equal(toReadableNestedFractionLatex(String.raw`1+\dfrac{1}{1+\tfrac{1}{x}}`), String.raw`1+\dfrac{1}{1+\tfrac{1}{x}}`);
 
   const run = (text, properties = "") => `<m:r>${properties}<m:t>${text}</m:t></m:r>`;
   const fraction = (numerator, denominator) => `<m:f><m:num>${numerator}</m:num><m:den>${denominator}</m:den></m:f>`;
@@ -182,10 +182,10 @@ test("uses display fractions for nested formulas without enlarging their outer c
   const ordinaryEquation = equations.find((xml) => wordMathFractionDepth(xml) === 1 && !xml.includes("3038"));
   assert.ok(deepEquation);
   assert.equal(wordMathFractionDepth(deepEquation), 3);
-  assert.match(deepEquation, /<w:sz w:val="30"\/>/);
+  assert.doesNotMatch(deepEquation, /<w:sz w:val="(?:26|30)"\/>/);
   assert.match(deepEquation, /<w:sz w:val="24"\/>/);
-  assert.match(deepEquation, /<m:fPr><m:type m:val="bar"\/><m:ctrlPr>[\s\S]*?<w:sz w:val="30"\/>/);
-  assert.match(deepEquation, /<\/m:fPr>[\s\S]*?<m:num>[\s\S]*?<m:ctrlPr>[\s\S]*?<\/m:num>/);
+  assert.equal(documentXml, `<w:p>${deepXml}${ordinaryXml}</w:p>`);
+  assert.doesNotMatch(documentXml, /<m:ctrlPr\b/);
   assert.doesNotMatch(documentXml, /<w:drawing\b/);
   assert.ok(ordinaryEquation);
   assert.doesNotMatch(ordinaryEquation, /<w:sz\b/);

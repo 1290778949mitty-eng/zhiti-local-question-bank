@@ -1,0 +1,45 @@
+/* Shared math typography, loaded after the legacy global stylesheet.
+ * Only size the KaTeX root. Never override .sizing, .scriptstyle or all spans:
+ * exponents and nested fractions need KaTeX's own relative sizes.
+ */
+.math-text .math-formula > .katex,
+.math-text .math-formula > .katex-display > .katex {
+  font-size: 1em;
+  color: inherit;
+}
+.math-text .math-formula.inline-math {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
+  margin: 0 .07em;
+  padding: .12em 0 .18em;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.math-text .math-formula.display-math {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: .45em 0;
+  padding: .15em 0 .25em;
+  overflow-x: auto;
+  white-space: normal;
+}
+.math-text .display-math > .katex-display {
+  margin: 0;
+  text-align: left;
+}
+.math-text .display-math > .katex-display > .katex {
+  display: inline-block;
+  text-align: left;
+}
+.math-render-error {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  text-decoration: underline dotted;
+  text-underline-offset: .2em;
+}
+.math-error-label {
+  font: inherit;
+  font-weight: 600;
+}

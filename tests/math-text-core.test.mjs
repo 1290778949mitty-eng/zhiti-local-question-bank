@@ -1,0 +1,94 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { splitMathText, splitMathLines, plainTextWebLines, toReadableNestedFractionLatex, toLatexMath, latexFractionDepth } from '../lib/math-text-core.mjs';
+import { enlargeNestedWordMath, wordMathFractionDepth, ensureWordMathSettings } from '../lib/word-math-sizing.mjs';
+
+const math = text => splitMathText(text, { autoDetect: false }).filter(s => s.kind === 'math');
+for (const [open, close, display] of [['$', '$', false], ['$$', '$$', true], ['\\(', '\\)', false], ['\\[', '\\]', true]]) {
+  test(`retains ${open} math style without modifying LaTeX`, () => {
+    const formula = String.raw`\frac{a_{n}}{2^{n}}=1+(n-1)\times\frac{3}{2}`;
+    assert.deepEqual(math(`before ${open}${formula}${close} after`), [{ kind: 'math', value: formula, explicit: true, display }]);
+  });
+}
+test('mixed inline and display delimiters retain their order and mode', () => {
+  assert.deepEqual(math('$a$ $$b$$ \\(c\\) \\[d\\]').map(s => [s.value, s.display]), [['a',false],['b',true],['c',false],['d',true]]);
+});
+test('escaped dollars are literal and do not swallow later formulas', () => {
+  const segments = splitMathText(String.raw`cost \$5; $x=2$; \$10`, {autoDetect:false});
+  assert.deepEqual(segments.filter(s=>s.kind==='math').map(s=>s.value), ['x=2']);
+  assert.equal(segments.map(s=>s.value).join(''), 'cost $5; x=2; $10');
+});
+test('escaped dollar inside a text command is not a closing delimiter', () => {
+  assert.equal(math(String.raw`$\text{cost \$5}+x$`)[0].value, String.raw`\text{cost \$5}+x`);
+});
+test('backslash parity does not open an escaped parenthesis delimiter', () => {
+  assert.deepEqual(math(String.raw`\\(literal\\)`), []);
+});
+test('math boundaries do not split Chinese text inside LaTeX braces', () => {
+  const source = String.raw`\frac{1}{2}\text{` + '\u5398\u7c73' + '}';
+  assert.equal(splitMathText(source).length, 1);
+  assert.equal(splitMathText(source)[0].value, source);
+});
+test('strict mode leaves undelimited expressions untouched', () => {
+  assert.deepEqual(splitMathText('A-B and x=2', {autoDetect:false}), [{kind:'text',value:'A-B and x=2'}]);
+});
+test('legacy Unicode equations and fill-in blanks remain supported', () => {
+  const source = 'y\uff1dax\u00b2\uff0bbx\uff0bc\uff08a\uff0cb\uff0cc \u4e3a\u5e38\u6570\uff09 ____';
+  const segments = splitMathText(source);
+  assert.equal(segments.map(s=>s.value).join(''), source);
+  assert.ok(segments.some(s=>s.kind==='math' && s.value==='y\uff1dax\u00b2\uff0bbx\uff0bc'));
+  assert.ok(segments.some(s=>s.kind==='text' && s.value==='____'));
+});
+test('multiline display math stays whole while surrounding prose splits', () => {
+  const formula = '$$\n\\begin{aligned}\na&=1\\\\\nb&=2\n\\end{aligned}\n$$';
+  assert.deepEqual(splitMathLines(`before\n${formula}\nafter`), ['before',formula,'after']);
+  assert.equal(math(formula)[0].display, true);
+  assert.equal(plainTextWebLines(formula).length, 1);
+  assert.equal(plainTextWebLines(formula)[0].align, 'center');
+});
+test('CRLF and surrounding blank lines are preserved without splitting formulas', () => {
+  assert.deepEqual(splitMathLines('a\r\n\r\n\\[x\r\n+y\\]\r\nb'), ['a','','\\[x\r\n+y\\]','b']);
+});
+test('unclosed delimiters are preserved for correction, never discarded', () => {
+  for (const source of ['$x', '$$x', '\\(x', '\\[x']) {
+    assert.equal(splitMathText(source,{autoDetect:false}).map(s=>s.value).join(''), source);
+  }
+});
+test('empty input and prose-only input are safe', () => {
+  assert.deepEqual(splitMathText(''), []);
+  assert.deepEqual(splitMathLines(''), ['']);
+  assert.deepEqual(splitMathLines('a\nb'), ['a','b']);
+});
+for (const source of [String.raw`\frac{1}{8}`, String.raw`\frac{\frac{5\sqrt{2}}{4}}{\frac{25}{2}}`, String.raw`1+\frac{1}{1+\frac{1}{1+\frac{1}{4x}}}`, String.raw`\dfrac{1}{1+\tfrac{1}{x}}`]) {
+  test(`does not promote nested fraction style: ${source}`, () => {
+    assert.equal(toReadableNestedFractionLatex(source), source);
+  });
+}
+test('fraction depth remains diagnostic, not a sizing policy', () => {
+  assert.equal(latexFractionDepth(String.raw`\frac{\frac{1}{2}}{\frac{3}{4}}`), 2);
+  assert.equal(toLatexMath('x\u00b2\uff0by\uff1d0'), 'x^{2}+y=0');
+});
+test('Word does not inject font sizes or control properties at any nesting depth', () => {
+  const run = value => `<m:r><m:t>${value}</m:t></m:r>`;
+  const frac = (num,den) => `<m:f><m:num>${num}</m:num><m:den>${den}</m:den></m:f>`;
+  for (let depth=1;depth<=4;depth++) {
+    let body=run('x');
+    for(let i=0;i<depth;i++)body=frac(run('1'),body);
+    const source=`<w:p><m:oMath>${body}</m:oMath></w:p>`;
+    assert.equal(wordMathFractionDepth(source), depth);
+    assert.equal(enlargeNestedWordMath(source),source);
+    assert.doesNotMatch(enlargeNestedWordMath(source), /<w:sz\b|<m:ctrlPr\b/);
+  }
+});
+test('author-defined imported Word sizes are preserved byte for byte', () => {
+  const source='<m:oMath><m:f><m:fPr/><m:num><m:r><w:rPr><w:sz w:val="24"/></w:rPr><m:t>1</m:t></m:r></m:num><m:den><m:f/></m:den></m:f></m:oMath>';
+  assert.equal(enlargeNestedWordMath(source),source);
+});
+test('Word math settings are still present and idempotent', () => {
+  const result=ensureWordMathSettings('<w:settings xmlns:w="word" xmlns:m="math"><w:compat/></w:settings>');
+  assert.match(result, /Cambria Math/);
+  assert.equal(ensureWordMathSettings(result),result);
+});
+test('legacy undelimited formulas never swallow physical line breaks', () => {
+  assert.deepEqual(splitMathText('x=1\ny=2').filter(s=>s.kind==='math').map(s=>s.value), ['x=1','y=2']);
+});
