@@ -28,11 +28,12 @@ export function studioAnswerParagraphs(text: string) {
   return lines.map((text, index)=>({text, keepNext:index<lines.length-1 && /^(?:(?:证明|解|解答)\s*[：:]|[（(]\d+[)）])$/.test(text)}));
 }
 
-export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode | "answers", options:{reviewCopy?:boolean;transcription?:boolean;bestEffort?:boolean}={}) {
+export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode | "answers", options:{reviewCopy?:boolean;transcription?:boolean;bestEffort?:boolean;includeTranscriptionWarnings?:boolean}={}) {
   // Direct exports and resumed legacy drafts share the same non-mutating
   // normalization as recognition. Never patch the downloaded DOCX afterward.
   draft={...draft,questions:draft.questions.map(normalizeStudioTextFields)};
   const bestEffort=!!options.bestEffort;
+  const includeTranscriptionWarnings=options.includeTranscriptionWarnings!==false;
   const issueMap=new Map<string,string[]>(),globalIssues:string[]=[];
   const addIssue=(q:StudioQuestion,message:string)=>{const list=issueMap.get(q.id)||[];list.push(message);issueMap.set(q.id,list);};
   if(xmlSafeText(draft.title)!==draft.title)globalIssues.push('资料名称含不可显示字符，已用替代符标记');
@@ -79,7 +80,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // full export. Preserve warning text literally so the original evidence is
   // still visible and editable in Word.
   const warningParagraph = (text:string) => new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:[new TextRun({text,color:'C00000',size:22,font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman'}})]});
-  if(globalIssues.length)children.push(warningParagraph('格式问题：'+[...new Set(globalIssues)].join('；')));
+  if(includeTranscriptionWarnings&&globalIssues.length)children.push(warningParagraph('格式问题：'+[...new Set(globalIssues)].join('；')));
   const studioTable = (table:{rows:string[][];red?:boolean},q:StudioQuestion,tableIndex:number) => {
     const columns=Math.max(...table.rows.map(row=>row.length));
     const width=Math.max(1,Math.floor(9300/columns));
@@ -126,7 +127,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if (d.caption) children.push(paragraph(d.caption,true,true,q,'图注'));
       children.push(new Paragraph({children:[new TextRun(token)]}));
     });
-    if(options.transcription){
+    if(options.transcription&&includeTranscriptionWarnings){
       const textWarnings=q.warnings.filter(w=>withFigures||!['尚未检查解答图与辅助线','仅答案材料：请确认未补写原件没有的步骤'].includes(w));
       const warnings=[...new Set([...textWarnings,...(withFigures?q.diagrams.flatMap(d=>d.warnings):[]),...(withStem?placed.warnings:[])])];
       const displayedWarnings=mode==='steps'?warnings.filter(w=>w.startsWith('几何符号 □')||w.includes('异常控制字符')):warnings;
