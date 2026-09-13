@@ -1,0 +1,78 @@
+# 数学公式稳定性修复：第一版与测试说明
+
+## 范围
+
+本版对应优化建议文档的第一版 PR 范围：统一新识别结果的显式 LaTeX、共享解析器和网页渲染器、识别行内与独立公式、取消嵌套分式的额外放大、统一公式相对于正文的字号。
+
+不修改数据库结构，不批量改写历史题目，不触碰 API Key、注册权限、发布地址或原作者仓库。没有增加额外 AI 请求。
+
+## 代码变化
+
+- `lib/math-output-contract.ts`：截图、批量录入及 Answer Studio 共用公式输出规则。要求 `$...$` / `$$...$$`、正确 JSON 转义、普通 `\frac`，禁止模型为了排版输出字号命令；不得求解、补写或偷偷纠正原件。
+- `lib/math-text-core.mjs`：唯一的解析实现，区分 `$...$`、`$$...$$`、`\(...\)`、`\[...\]`；处理转义美元符号；保持显式公式内部结构和多行内容。
+- `lib/math-text.ts`、`lib/answer-studio-math-text.ts`：兼容入口，转发到同一个实现。保留历史 Unicode / 未加定界符的公式兼容逻辑，避免旧题目突然不显示；新识别结果依赖显式定界符。
+- `MathText` 与 `StudioMathText` 共用组件：将 `display` 传给 KaTeX 的 `displayMode`；语法错误显示“公式待核对”，保留原文，不再静默降级。
+- `app/math-typography.css`：只控制 KaTeX 根元素的相对字号，不覆盖其内部上下标和分式字号。较长的独立公式可在自身容器滚动，不靠整式缩小塞进页面。
+- `lib/word-math-sizing.mjs`：保留兼容函数名，但停止按分式层数注入 26/30 半磅字号。已导入的原始 OMML 不做强行统一。
+- `lib/answer-studio-rich-text.ts`：正文文字与已有 Normal / StudioAnswer 段落样式一致，统一为 22 半磅（11 磅）。
+
+公式可能因为分式、根式而自然增高，上下标也仍会缩小；这不是错误。本版取消的是额外、与语义结构无关的放大。
+
+## 已执行的验证
+
+在本次修改的执行环境中：
+
+```bash
+node --test tests/math-text-core.test.mjs
+```
+
+24 项基础行为测试通过，覆盖四种定界符、转义美元符号、旧式数学文本、中文 LaTeX 参数、独立公式、多行边界和 Word 字号保留。同时使用 TypeScript 编译器做了已修改 TS/TSX 文件的语法检查，没有语法诊断错误；这不等于完整类型检查。
+
+当前执行环境无法联网下载仓库和 npm 依赖，因此没有完成 `npm test`、完整应用构建、真实浏览器录入/保存/导出操作、DOCX 逐页视觉验收，也没有调用用户的 Gemini 中转站。不能据此宣称端到端问题全部解决。
+
+新增 `tests/math-rendering-consistency.test.mjs` 包含真实 KaTeX/React 静态渲染与 Studio DOCX 结构测试，需在安装项目依赖后执行；本环境尚未执行这两项集成测试。原有 `rendered-html.test.mjs` 中要求强制放大的断言已按新策略更新，其他历史测试保留。
+
+## 本地测试
+
+先备份题库，再在项目根目录操作。不要覆盖或提交 `.env.local` / `.dev.vars`。
+
+```bash
+git status
+git fetch origin
+git switch --track origin/fix/math-rendering-consistency
+npm install
+node --test tests/math-text-core.test.mjs
+node --test tests/math-rendering-consistency.test.mjs
+npm run lint
+npm test
+npm run dev
+```
+
+分支已经在本地存在时，用 `git switch fix/math-rendering-consistency`。若 Git 提示本地未提交修改会被覆盖，先保存自己的改动，不使用强制切换或 `reset --hard`。
+
+## 人工验收清单
+
+1. **已有题目**：刷新旧题，确认题干、选项、答案、解析没有丢字；Unicode 数学符号、填空横线的既有兼容行为没有回退。
+2. **重新识别**：重新上传数列、抛物线和嵌套分式样本。新 Prompt 只影响新请求，不会重写旧识别文本。
+3. **两种网页入口**：在题库和 Answer Studio 比较相同的行内/独立公式。相同正文上下文下主体字号一致，独立公式自然展开；指数不是被强行变成正文字号。
+4. **报错提示**：输入 `$\frac{1}{$`，确认“公式待核对”提示和原始表达式可见。
+5. **Word 导出**：从真实网页重新导出 DOCX，检查分式仍为可编辑公式，嵌套分式不再因为层数被整体改成 13/15 磅；在实际使用的 Word/WPS 中检查分页、公式裁切与图片。旧的已导出文件不会自动变化。
+6. **移动端与长公式**：检查窄屏下能完整读取长式，页面不被公式撑宽，横向滚动只发生在公式自身容器。
+
+可用于手工录入的样例：
+
+```latex
+设 $P\left(m,-\frac{1}{8}m^{2}+\frac{1}{2}m+4\right)$。
+$$d=\frac{\left|-\frac{1}{8}m^{2}+\frac{3}{2}m\right|}{\sqrt{2}}$$
+$$\sin\angle PAD=\frac{\frac{5\sqrt{2}}{4}}{\frac{25}{2}}$$
+```
+
+## 明确的边界
+
+- 语法能渲染不代表数学识别正确，例如把减号识别成加号仍可能通过 KaTeX。须对照原图校对。
+- 保留原文显式写出的 `\dfrac` / `\tfrac`；不擅自改写历史内容。本版只是停止程序自动升级。
+- 本版没有实现保存前的统一强制拦截、局部裁图二次识别、公式级置信度、并发识别队列，这些属于后续阶段。
+- Word 原生公式转换器的命令支持范围没有在本版全面重写；网页能显示的全部 LaTeX 不保证都能导出为原生 Word 公式。含复杂环境或跨物理行公式的 Word 导出须重点验收；新 Prompt 要求每个公式保持在一个逻辑文本行，以适应现有导出流程。
+- 旧 DOCX 原样导入通道保留作者原本设置的字号；不会为了视觉统一破坏原始版式。
+
+验证尚未完成，因此请在本地验收后再合并到主分支。

@@ -10,6 +10,7 @@ import { recognizeStudioDrawings } from '../../lib/answer-studio-drawings';
 import { transcribeStudio, type StudioDrawingResult } from '../../lib/answer-studio-pipeline';
 import { StudioDownloads, type StudioDownload } from '../../lib/answer-studio-downloads';
 import { studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, studioTextReady, type StudioOutputMode } from '../../lib/answer-studio-output';
+import { studioApi as api, STUDIO_TEXT_CONCURRENCY, STUDIO_CONCURRENCY_CHOICES } from '../../lib/answer-studio-concurrency';
 import './studio.css';
 
 function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'|'text'|'check'|'back'}) {
@@ -27,13 +28,6 @@ function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'
   return <svg className="studio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 
-async function api<T>(url:string, body:unknown):Promise<T> {
-  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const data=await response.json().catch(()=>({error:`识别服务返回异常（${response.status}）`}));
-  if(!response.ok)throw new Error(data.error||'识别失败');
-  return data;
-}
-
 export default function AnswerStudioPage() {
   const [user,setUser]=useState<AuthUser|null>(null),[loaded,setLoaded]=useState(false);
   const [mode,setMode]=useState<'paired'|'answers'>('paired'),[title,setTitle]=useState('');
@@ -41,6 +35,8 @@ export default function AnswerStudioPage() {
   const [busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[failed,setFailed]=useState(false);
   const [saved,setSaved]=useState<StudioDraft|null>(null),[downloads,setDownloads]=useState<StudioDownload[]>([]);
   const [output,setOutput]=useState<StudioOutputMode>('full');
+  const [includeTranscriptionWarnings,setIncludeTranscriptionWarnings]=useState(true);
+  const [textConcurrency,setTextConcurrency]=useState(STUDIO_TEXT_CONCURRENCY);
   const links=useRef(new StudioDownloads()),running=useRef(false);
   useEffect(()=>{
     let active=true;const urls=links.current;
@@ -81,14 +77,14 @@ export default function AnswerStudioPage() {
       const result=await transcribeStudio(draft,{
         progress:setNotice,checkpoint,
         crop:(image,box)=>cropStudioImage(image,box,1200),
-        recognize:async(page,context)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context})).records,
+        recognize:async(page,context,requestOptions)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context,concurrent:!!requestOptions?.concurrent})).records,
         drawings:(question,bases,evidence,context)=>recognizeStudioDrawings(question,bases,evidence,body=>api<StudioDrawingResult>('/api/answer-studio/drawings',body),undefined,context),
-      },{drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
+      },{textConcurrency,drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
       if(!variant){setNotice(`文字转录完成：${result.questions.length} 题。请选择结果版本；无图版本无需等待配图。`);return;}
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../lib/answer-studio-export');
       const label=studioOutputs.find(item=>item.value===variant)!.label;
-      const blob=await buildStudioWord(result,variant,{transcription:true,bestEffort:true});
+      const blob=await buildStudioWord(result,variant,{transcription:true,bestEffort:true,includeTranscriptionWarnings});
       setDownloads(links.current.offer(blob,`${result.title}_${label}.docx`,'下载 Word'));
       setNotice('');
     }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'转录失败');}
@@ -109,6 +105,16 @@ export default function AnswerStudioPage() {
         <label className="field-label"><span className="field-heading"><StudioIcon name="file"/>资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
         {mode==='paired'&&<label className="field-label"><span className="field-heading"><StudioIcon name="file"/>上传原件 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('question',e.target.files)}/>{!!questionFiles.length&&<small className="file-picked">已选择 {questionFiles.length} 个文件</small>}</label>}
         <label className="field-label"><span className="field-heading"><StudioIcon name="pen"/>上传手写答案 <em>PDF、PNG、JPG、WebP</em></span><input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={e=>files('answer',e.target.files)}/>{!!answerFiles.length&&<small className="file-picked">已选择 {answerFiles.length} 个文件</small>}</label>
+<details style={{marginTop:12,fontSize:14}}>
+          <summary style={{cursor:'pointer'}}>转录速度：最多 {textConcurrency} 路</summary>
+          <label htmlFor="studio-text-concurrency" style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginTop:8}}>
+            <span>同时识别页数</span>
+            <select id="studio-text-concurrency" value={textConcurrency} disabled={busy} style={{width:'auto',minWidth:110,padding:'6px 10px'}} onChange={e=>setTextConcurrency(Number(e.target.value))}>
+              {STUDIO_CONCURRENCY_CHOICES.map(value=><option key={value} value={value}>{value} 路{value===1?'（逐页）':value===4?'（推荐）':''}</option>)}
+            </select>
+          </label>
+          <small>默认 4 路，遇限流自动降速；跨页连续解答较多时可选 1 路。完整解题版配图最多 2 路。</small>
+        </details>
       </fieldset>
       {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
       {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
@@ -121,11 +127,15 @@ export default function AnswerStudioPage() {
             <span className="output-icon"><StudioIcon name={item.value==='full'?'spark':item.value==='text'?'text':'steps'}/></span><span className="output-copy"><strong>{item.label}</strong><small>{item.value==='full'?(studioIncludesQuestionFigures(saved)?'原题、解析、原题图和解答图。':'原题文字、解析和解答图（含必要底图）。'):item.description}</small></span>
           </label>)}
         </fieldset>
+        <label htmlFor="studio-include-transcription-warnings" style={{display:'flex',alignItems:'flex-start',gap:8,margin:'8px 2px 4px',padding:'2px 0',cursor:'pointer'}}>
+          <input id="studio-include-transcription-warnings" type="checkbox" checked={includeTranscriptionWarnings} disabled={busy} style={{flex:'0 0 auto',width:18,height:18,margin:'3px 0 0'}} onChange={e=>{const checked=e.target.checked;setIncludeTranscriptionWarnings(checked);setDownloads(links.current.invalidate());setNotice(checked?'生成的 Word 将保留转录提示和格式问题。':'生成的 Word 将不附加转录提示或格式问题。');setFailed(false);}}/>
+          <span style={{display:'block',minWidth:0}}><span style={{display:'block',fontWeight:600,fontSize:14,lineHeight:1.45}}>在 Word 中加入转录问题提示</span><small style={{display:'block',marginTop:2,lineHeight:1.45}}>显示识别疑点和格式问题；关闭后不附加这些红色提示。</small></span>
+        </label>
         {studioOutputBlocker(saved,output)&&<p className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
-        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':output==='full'?'生成完整解题版':'生成无图 Word'}</button>}
+        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':'生成 Word'}</button>}
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
       </section>}
-      <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。任务保存在当前浏览器，不跨设备同步；识别有疑问处会在 Word 中提示。</small>
+      <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。任务保存在当前浏览器，不跨设备同步；识别有疑问处是否写入 Word 可用上方勾选项设置。</small>
     </section>
   </main>;
 }

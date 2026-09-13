@@ -1,3 +1,4 @@
+import { mathOutputRequirements } from "./math-output-contract";
 import { normalizeDiagramRotation } from "./image-processing-rules.mjs";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "./recognition-cleanup.mjs";
 import type { DiagramCapture, DiagramKind, DiagramQuality, Difficulty, QuestionType } from "./types";
@@ -73,8 +74,9 @@ export const batchRecognitionSchema: Record<string, unknown> = {
 
 export const commonRecognitionRequirements = [
   "stem 去掉题号，但必须保留全部条件、结论、分问和设问，不得概括或改写。",
-  "常用数学符号优先使用 Unicode（如 √、∠、△、²、＝）；复杂分式、根式、矩阵和上下标使用 $LaTeX$，不得用图片代替公式。",
-  "完整等式或不等式必须连续书写；公式后的变量说明括号不属于公式。例如应写成“y＝ax²＋bx＋c（a，b，c 为常数）”，不得把“（a”并入公式。",
+  ...mathOutputRequirements,
+  "不得用图片代替公式；只转录原件，不因格式校验而改写数学内容。",
+  "Keep each complete equality/inequality together in a math delimiter; prose explanations and their parentheses belong outside the formula, e.g. $y=ax^{2}+bx+c$ followed by the explanation of $a$, $b$ and $c$.",
   "选择题选项去掉 A/B/C/D 标号后分别放入 options；非选择题返回空数组。",
   "只填写原图明确给出的答案与解析；没有则返回空字符串，禁止猜测、补写或自行解答。",
   "source 只保留明确出现的来源，tags 提取知识点或题目模型。",

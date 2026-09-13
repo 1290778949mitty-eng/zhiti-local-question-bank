@@ -1,4 +1,4 @@
-export type AntigravityResult = { text?: string; error?: string; status: number };
+export type AntigravityResult = { text?: string; error?: string; status: number; retryAfter?: string | null };
 
 type JsonSchema = Record<string, unknown>;
 
@@ -80,16 +80,18 @@ export async function callAntigravityGemini(
       },
     }),
   });
+  const retryAfter = response.headers.get("retry-after");
   const raw = await response.text();
   let payload: Record<string, unknown> = {};
   try {
     payload = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return { status: response.status, error: `Antigravity 返回了非 JSON 响应（HTTP ${response.status}）` };
+    return { status: response.status, retryAfter, error: `Antigravity 返回了非 JSON 响应（HTTP ${response.status}）` };
   }
   const error = payload.error as { message?: string } | undefined;
   return {
     status: response.status,
+    retryAfter,
     text: response.ok ? responseText(payload) : undefined,
     error: error?.message || (!response.ok ? `Antigravity 请求失败（${response.status}）` : undefined),
   };
