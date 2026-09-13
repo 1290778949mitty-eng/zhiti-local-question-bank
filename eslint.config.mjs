@@ -42,6 +42,12 @@ const eslintConfig = defineConfig([
       },
     },
   },
+  {
+    files: ["tests/**/*.mjs"],
+    rules: {
+      "@next/next/no-assign-module-variable": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
