@@ -27,8 +27,9 @@ async function fixture(t){
 }
 const draft={version:1,inputMode:'answers',title:'界面验证',pages:[],answers:[],questions:[{id:'q',stem:'原题',analysis:'解析',answerIds:[],diagrams:[],tables:[],warnings:Array.from({length:102},(_,i)=>`原有提示${i}`)}]};
 function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[]}={}){
-  // useState order in AnswerStudioPage: auth, input fields, lifecycle, result.
-  seed([{id:'local',local:true},true,'answers','界面验证',[],[],busy,notice,failed,saved,downloads,'full']);
+  // useState order in AnswerStudioPage: auth, input fields, lifecycle, result,
+  // transcription-warning preference, then text concurrency.
+  seed([{id:'local',local:true},true,'answers','界面验证',[],[],busy,notice,failed,saved,downloads,'full',true,4]);
   return renderToStaticMarkup(createElement(Page));
 }
 test('ready and downloaded results hide issue statistics and backup controls without changing the draft',async t=>{
