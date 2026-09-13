@@ -38,7 +38,7 @@ test('overgroup accents and bigodot retain distinct native mathematical symbols'
 test('OCR nequiv typo is normalized to the intended parallel symbol',async()=>{
   const normalized=normalizeStudioMathEscapes(String.raw`$NE \nequiv BC$`);
   assert.equal(normalized,String.raw`$NE \parallel BC$`);
-  assert.match(mathOmml(normalized),/>∥<\/m:t>/);
+  assert.match(mathOmml(normalized.slice(1,-1)),/>∥<\/m:t>/);
 });
 test('S9 winter answer export fixture keeps every reported math form native',async()=>{
   const fixture=JSON.parse(await fs.readFile(new URL('./fixtures/answer-studio-s9-math.json',import.meta.url),'utf8'));
