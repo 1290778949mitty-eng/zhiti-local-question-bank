@@ -5,6 +5,7 @@ import { join } from 'node:path';
 const ROOT=process.cwd();
 const TEST_DIR=join(ROOT,'tests');
 const E2E=new Set(['homework-e2e.test.mjs','scoped-library-e2e.test.mjs']);
+const WRANGLER_RETRY=join('scripts','local-wrangler-fetch-retry.mjs');
 
 function run(args,{label,retries=0}={}){
   return new Promise((resolve,reject)=>{
@@ -31,5 +32,5 @@ const unit=files.filter(name=>!E2E.has(name)).map(name=>join('tests',name));
 // sockets or runtime state that destabilize local Workers/D1/R2 on CI runners.
 await run(['--test','--test-concurrency=1',...unit],{label:'unit/regression tests'});
 for(const name of E2E){
-  await run(['--test','--test-concurrency=1',join('tests',name)],{label:name,retries:1});
+  await run(['--import',WRANGLER_RETRY,'--test','--test-concurrency=1',join('tests',name)],{label:name,retries:1});
 }
