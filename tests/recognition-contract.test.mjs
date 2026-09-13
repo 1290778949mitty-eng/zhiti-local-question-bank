@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { build } from "esbuild";
+
+const recognitionBuild = await build({ entryPoints: ["lib/recognition-contract.ts"], bundle: true, write: false, format: "esm", platform: "node" });
+const {
   batchRecognitionSchema,
   buildBatchRecognitionPrompt,
   buildSingleRecognitionPrompt,
@@ -9,7 +12,7 @@ import {
   normalizeSingleRecognitionResult,
   recognitionQuestionSchema,
   singleRecognitionSchema,
-} from "../lib/recognition-contract.ts";
+} = await import("data:text/javascript;base64," + Buffer.from(recognitionBuild.outputFiles[0].text).toString("base64"));
 import { hasUsableRecognitionDiagramBox, MIN_RECOGNITION_DIAGRAM_EDGE, shouldReconstructRecognizedDiagram } from "../lib/recognition-diagram-rules.mjs";
 import { recognitionReasoningEffort } from "../lib/server/recognition-model-rules.mjs";
 
