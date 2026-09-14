@@ -7,3 +7,5 @@ export function normalizeAiProviderApiBase(value: unknown): string;
 export function aiProviderModelsUrl(baseUrl: unknown): string;
 export function parseAiProviderModelCatalog(payload: unknown): AiProviderModel[];
 export function selectAiProviderRoleModel(config: { recognitionModel?: string; textModel?: string; diagramModel?: string; gradingModel?: string }, role: AiProviderRole): string;
+export function shouldTryAlternateAiProtocol(result: { status?: number; retryAfter?: string | null }): boolean;
+export function aiProviderAutoProtocolOrder(model: unknown): Array<Exclude<AiProviderWireApi, "auto">>;

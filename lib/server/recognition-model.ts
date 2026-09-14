@@ -17,10 +17,11 @@ export async function callRecognitionModel(input: RecognitionModelInput): Promis
     schemaName: input.schemaName,
     reasoningEffort: recognitionReasoningEffort(),
     missingMessage: "尚未配置智能识别",
-    // Answer Studio owns retry/backoff. Preserve the old behavior: do not
-    // immediately switch protocol for transient/auth failures in teacher flows.
+    // Answer Studio owns retry/backoff. Authentication, rate limits and timeouts
+    // should remain single-protocol failures, but generic 5xx/protocol errors may
+    // indicate an incompatible wire API and are allowed to try the next adapter.
     stopAutoFallbackStatuses: input.schemaName.startsWith("teacher_")
-      ? [401, 403, 408, 429, 500, 502, 503, 504]
+      ? [401, 403, 408, 429]
       : [],
   });
 }

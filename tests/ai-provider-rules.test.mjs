@@ -39,3 +39,21 @@ test("selects a task-specific model with sensible fallbacks", () => {
   assert.equal(rules.selectAiProviderRoleModel(config, "diagram"), "vision-a");
   assert.equal(rules.selectAiProviderRoleModel(config, "grading"), "vision-a");
 });
+
+test("auto protocol retries a generic upstream 500 instead of aborting teacher recognition", () => {
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 500, retryAfter: null }), true);
+});
+
+test("auto protocol does not switch on auth, rate limit, timeout, or explicit retry-after", () => {
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 401, retryAfter: null }), false);
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 403, retryAfter: null }), false);
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 408, retryAfter: null }), false);
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 429, retryAfter: null }), false);
+  assert.equal(rules.shouldTryAlternateAiProtocol({ status: 503, retryAfter: "30" }), false);
+});
+
+test("auto protocol adds Antigravity as a final Gemini compatibility path", () => {
+  assert.deepEqual(rules.aiProviderAutoProtocolOrder("gemini-3.8-flash-high"), ["responses", "chat_completions", "antigravity_gemini"]);
+  assert.deepEqual(rules.aiProviderAutoProtocolOrder("google/gemini-3.8-flash-high"), ["responses", "chat_completions", "antigravity_gemini"]);
+  assert.deepEqual(rules.aiProviderAutoProtocolOrder("gpt-5.6"), ["responses", "chat_completions"]);
+});

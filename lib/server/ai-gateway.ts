@@ -1,4 +1,10 @@
-import { normalizeAiProviderApiBase, type AiProviderRole } from "../ai-provider-rules.mjs";
+import {
+  aiProviderAutoProtocolOrder,
+  normalizeAiProviderApiBase,
+  shouldTryAlternateAiProtocol,
+  type AiProviderRole,
+  type AiProviderWireApi,
+} from "../ai-provider-rules.mjs";
 import { callAntigravityGemini, type AntigravityResult } from "./antigravity-gemini";
 import { resolveAiRuntime, type AiRuntime } from "./ai-provider";
 
@@ -14,6 +20,7 @@ export type StructuredAiInput = {
 };
 
 export type AiGatewayResult = AntigravityResult;
+type ConcreteWireApi = Exclude<AiProviderWireApi, "auto">;
 
 function outputText(payload: Record<string, unknown>) {
   if (typeof payload.output_text === "string") return payload.output_text;
@@ -80,26 +87,43 @@ async function callChatCompletions(runtime: AiRuntime, input: StructuredAiInput)
   };
 }
 
+async function callProtocol(protocol: ConcreteWireApi, runtime: AiRuntime, input: StructuredAiInput): Promise<AiGatewayResult> {
+  if (protocol === "responses") return callResponses(runtime, input);
+  if (protocol === "chat_completions") return callChatCompletions(runtime, input);
+  return callAntigravityGemini(
+    runtime.baseUrl,
+    runtime.apiKey,
+    runtime.model,
+    input.prompt,
+    input.images ?? [],
+    input.schema,
+    input.reasoningEffort || "high",
+  );
+}
+
+function protocolLabel(protocol: ConcreteWireApi) {
+  if (protocol === "responses") return "Responses";
+  if (protocol === "chat_completions") return "Chat Completions";
+  return "Antigravity Gemini";
+}
+
 export async function callStructuredAi(input: StructuredAiInput): Promise<AiGatewayResult> {
   const runtime = await resolveAiRuntime(input.role);
   if (!runtime) return { status: 503, error: input.missingMessage || "尚未配置 AI Provider" };
-  if (runtime.wireApi === "antigravity_gemini") {
-    return callAntigravityGemini(
-      runtime.baseUrl,
-      runtime.apiKey,
-      runtime.model,
-      input.prompt,
-      input.images ?? [],
-      input.schema,
-      input.reasoningEffort || "high",
-    );
+  if (runtime.wireApi !== "auto") return callProtocol(runtime.wireApi, runtime, input);
+
+  const failures: string[] = [];
+  let lastResult: AiGatewayResult = { status: 502, error: "AI Provider 自动协议没有返回结果" };
+  for (const protocol of aiProviderAutoProtocolOrder(runtime.model)) {
+    const result = await callProtocol(protocol, runtime, input);
+    lastResult = result;
+    if (result.text && result.status < 400) return result;
+    failures.push(`${protocolLabel(protocol)}: ${result.error || `HTTP ${result.status}`}`);
+    if ((input.stopAutoFallbackStatuses ?? []).includes(result.status)) return result;
+    if (!shouldTryAlternateAiProtocol(result)) return result;
   }
-  if (runtime.wireApi === "chat_completions") return callChatCompletions(runtime, input);
-  if (runtime.wireApi === "responses") return callResponses(runtime, input);
-  const first = await callResponses(runtime, input);
-  if (first.text && first.status < 400) return first;
-  if ((input.stopAutoFallbackStatuses ?? []).includes(first.status)) return first;
-  const fallback = await callChatCompletions(runtime, input);
-  if (!fallback.error) fallback.error = first.error;
-  return fallback;
+  return {
+    ...lastResult,
+    error: `${runtime.providerName} / ${runtime.model} 自动协议均失败：${failures.join("；")}`,
+  };
 }
